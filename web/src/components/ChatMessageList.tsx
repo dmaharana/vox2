@@ -24,6 +24,7 @@ import {
   FileCode,
   Copy,
   Check,
+  Activity,
 } from 'lucide-react'
 
 interface Props {
@@ -292,9 +293,23 @@ export const ChatMessageList: React.FC<Props> = ({ messages, streaming }) => {
 
                     {/* Assistant Response Actions Toolbar */}
                     <div className="flex items-center justify-between pt-2.5 mt-2.5 border-t border-border/40 text-[11px] text-muted-foreground select-none">
-                      <span className="text-[10px] opacity-60 font-mono">
-                        {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                      </span>
+                      <div className="flex items-center gap-2 font-mono text-[10px] opacity-75">
+                        <span>
+                          {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                        </span>
+                        {m.traceId && (
+                          <>
+                            <span className="opacity-40">•</span>
+                            <span
+                              className="inline-flex items-center gap-1 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-500/20 text-[10px]"
+                              title={`OpenTelemetry Trace ID: ${m.traceId}`}
+                            >
+                              <Activity className="w-2.5 h-2.5" />
+                              trace:{m.traceId.slice(0, 8)}...
+                            </span>
+                          </>
+                        )}
+                      </div>
                       <Button
                         size="sm"
                         variant="ghost"

@@ -9,6 +9,7 @@ import { ToolsSkillsModal } from './components/ToolsSkillsModal'
 import { MemoryModal } from './components/MemoryModal'
 import { ConversationsDrawer } from './components/ConversationsDrawer'
 import { AppSidebar } from './components/AppSidebar'
+import { VoxLogo } from './components/VoxLogo'
 import { Button } from './components/ui/button'
 import { Textarea } from './components/ui/textarea'
 import { Badge } from './components/ui/badge'
@@ -264,12 +265,38 @@ export function AppContent() {
     try {
       const data = await fetchConversation(id)
       setConversationId(data.conversation.id)
-      const mapped: ChatMessage[] = (data.messages || []).map((m: any) => ({
-        id: m.id,
-        role: m.role as any,
-        content: m.content,
-        timestamp: m.created_at,
-      }))
+      const mapped: ChatMessage[] = (data.messages || []).map((m: any) => {
+        let toolCalls: ToolCallState[] | undefined
+        let subflows: SubflowState[] | undefined
+        let memoriesRetrieved: MemoryItem[] | undefined
+
+        if (m.tool_calls) {
+          try {
+            toolCalls = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls
+          } catch {}
+        }
+        if (m.subflows) {
+          try {
+            subflows = typeof m.subflows === 'string' ? JSON.parse(m.subflows) : m.subflows
+          } catch {}
+        }
+        if (m.memories_retrieved) {
+          try {
+            memoriesRetrieved = typeof m.memories_retrieved === 'string' ? JSON.parse(m.memories_retrieved) : m.memories_retrieved
+          } catch {}
+        }
+
+        return {
+          id: m.id,
+          role: m.role as any,
+          content: m.content,
+          toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+          subflows: subflows && subflows.length > 0 ? subflows : undefined,
+          memoriesRetrieved: memoriesRetrieved && memoriesRetrieved.length > 0 ? memoriesRetrieved : undefined,
+          traceId: m.trace_id || undefined,
+          timestamp: m.created_at,
+        }
+      })
       setMessages(mapped)
     } catch (e) {
       console.error(e)
@@ -328,8 +355,7 @@ export function AppContent() {
               </Button>
             )}
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-foreground font-bold text-sm tracking-tight">Go Agent Harness</span>
-              <span className="text-muted-foreground/60 font-normal">•</span>
+              <span className="text-foreground font-semibold">Active Session:</span>
               <span className="text-muted-foreground font-mono bg-muted/60 px-2 py-0.5 rounded-md border text-[11px]">
                 {conversationId}
               </span>
@@ -352,16 +378,19 @@ export function AppContent() {
         <main className="flex-1 overflow-y-auto px-4 md:px-8 py-6 max-w-4xl w-full mx-auto">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center space-y-4 py-16 text-muted-foreground">
-              <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shadow-xs">
-                <Terminal className="w-7 h-7" />
+              <div className="relative group">
+                <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-cyan-500/30 to-purple-500/30 blur-lg opacity-75 group-hover:opacity-100 transition duration-500"></div>
+                <VoxLogo size={64} className="relative" />
               </div>
-              <div className="space-y-1">
-                <h2 className="text-lg font-bold text-foreground">Welcome to Go Agent Harness</h2>
-                <p className="text-xs max-w-md">
-                  Powered by OpenAI-compatible LLMs, dynamic filesystem tools, official MCP servers, cognitive FTS5 memories, and parallel subflows.
+              <div className="space-y-1.5">
+                <h2 className="text-xl font-extrabold tracking-tight text-foreground flex items-center justify-center gap-1.5">
+                  Welcome to <span className="bg-gradient-to-r from-cyan-400 via-indigo-400 to-purple-500 bg-clip-text text-transparent">Vox2 Studio</span>
+                </h2>
+                <p className="text-xs max-w-md mx-auto text-muted-foreground">
+                  Next-generation harness for autonomous AI agents, dynamic MCP tools, cognitive memory, and parallel subflows.
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2 justify-center max-w-lg pt-2">
+              <div className="flex flex-wrap gap-2 justify-center max-w-lg pt-3">
                 <button
                   type="button"
                   onClick={() => setInput('Read the files in this directory and summarize the codebase structure')}

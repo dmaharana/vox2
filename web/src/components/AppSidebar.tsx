@@ -7,6 +7,7 @@ import {
   TooltipTrigger,
 } from './ui/tooltip'
 import { useTheme } from '../lib/theme'
+import { VoxLogo } from './VoxLogo'
 import {
   Sliders,
   Server,
@@ -118,30 +119,18 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                   variant="ghost"
                   size="icon"
                   onClick={onToggleCollapse}
-                  className="h-10 w-10 rounded-xl text-primary hover:bg-primary/10 transition-colors"
+                  className="h-10 w-10 p-0 rounded-xl hover:bg-primary/10 transition-colors"
                 >
-                  <Bot className="h-5 w-5" />
+                  <VoxLogo size={32} />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="right" className="text-xs">
-                Expand sidebar (Go Agent Harness)
+                Expand sidebar (Vox2 Studio)
               </TooltipContent>
             </Tooltip>
           ) : (
             <>
-              <div className="flex items-center gap-2.5 overflow-hidden">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-xs ring-1 ring-primary/20">
-                  <Bot className="h-5 w-5" />
-                </div>
-                <div className="flex flex-col truncate">
-                  <span className="text-xs font-bold tracking-tight text-foreground">
-                    Go Agent Harness
-                  </span>
-                  <span className="text-[10px] text-muted-foreground font-mono">
-                    v1.0.0 • AI Studio
-                  </span>
-                </div>
-              </div>
+              <VoxLogo size={32} showText={true} subtext="v1.0.0 • AI Studio" />
 
               {/* Toggle Collapse */}
               <Tooltip>

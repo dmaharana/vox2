@@ -73,6 +73,7 @@ export interface ChatMessage {
   toolCalls?: ToolCallState[]
   subflows?: SubflowState[]
   memoriesRetrieved?: MemoryItem[]
+  traceId?: string
   timestamp: string
 }
 
