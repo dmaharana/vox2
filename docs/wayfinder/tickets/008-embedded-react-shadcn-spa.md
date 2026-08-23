@@ -2,12 +2,26 @@
 
 **Labels:** `wayfinder:task`  
 **Parent Map:** [docs/wayfinder/map.md](../map.md)  
-**Status:** Open  
-**Blocked By:** [Ticket 001](001-core-architecture-websocket-hub.md), [Ticket 007](007-llm-orchestration-and-chat-loop.md)
+**Status:** Closed  
+**Assignee:** Agent  
+**Blocked By:** None  
 
 ## Question
 
 How should the embedded React SPA (Vite + Tailwind + shadcn/ui) be constructed to provide chat interaction, configuration drawers for LLMs & MCP servers, tool & skill enable/disable switches, conversation management with CSV export, and disclaimer banners?
+
+## Resolution
+
+- Implemented full React + Tailwind + Radix UI / Shadcn dashboard in `web/src/`.
+- Built LLM Settings dialog (`SettingsModal.tsx`) for dynamic Base URL, Model, API Key, Temperature, and Max Tokens configuration.
+- Built MCP Server Manager dialog (`MCPServersModal.tsx`) with Stdio and HTTP SSE server creation, live connect/disconnect, and status badges.
+- Built Tools & Skills drawer (`ToolsSkillsModal.tsx`) allowing granular enable/disable toggles for built-in tools, MCP tools, and loaded skills.
+- Built Memory Inspector (`MemoryModal.tsx`) for FTS5 cognitive search across Short-Term and Long-Term tiers, manual memory creation, and aging promotion.
+- Built Conversation Manager (`ConversationsDrawer.tsx`) to switch sessions, delete history, start new chats, and export conversation records as CSV.
+- Added live WebSocket message stream (`ChatMessageList.tsx`) with real-time markdown token rendering, collapsible tool call cards, parallel subflow progress cards, and memory context chips.
+- Added user disclaimer footer: `"AI can make mistakes, so double-check responses"` at the bottom of the chat interface.
+- Embedded `web/dist` directly into the Go backend binary via `embed.FS` with fallback client-side routing.
+- Built production binary `go-harness` successfully.
 
 ## Deliverable / Acceptance Criteria
 

@@ -2,12 +2,25 @@
 
 **Labels:** `wayfinder:task`  
 **Parent Map:** [docs/wayfinder/map.md](../map.md)  
-**Status:** Open  
-**Blocked By:** [Ticket 001](001-core-architecture-websocket-hub.md), [Ticket 003](003-built-in-tools-and-skills-engine.md), [Ticket 004](004-sqlite-conversation-and-fts5-memory.md), [Ticket 005](005-mcp-stdio-and-http-integration.md), [Ticket 006](006-parallel-flow-orchestration.md)
+**Status:** Closed  
+**Assignee:** Agent  
+**Blocked By:** None  
 
 ## Question
 
 How should the OpenAI-compatible streaming LLM client using standard SDKs (`github.com/sashabaranov/go-openai`), multi-turn agent loop, memory context injection, dynamic tool dispatch, and streaming token broadcast be implemented?
+
+## Resolution
+
+- Implemented `pkg/llm/client.go` using `sashabaranov/go-openai` supporting custom `BaseURL`, `Model`, `APIKey`, temperature, and token parameters with dynamic refresh.
+- Implemented `pkg/llm/orchestrator.go` autonomous multi-turn agent loop with:
+  - System prompt generation injecting active skills and FTS5 retrieved memories.
+  - Multi-turn conversation persistence in SQLite database.
+  - Streaming token generation dispatching real-time `token` deltas over WebSocket.
+  - Dynamic tool calling (built-in file tools, MCP tools, memory tools, parallel flows).
+  - Context cancellation support when users request Stop/Cancel.
+  - End-of-turn disclaimer `"AI can make mistakes, so double-check responses"` attached in `done` events.
+- Added test suite in `pkg/llm/llm_test.go` verifying streaming chunks, mock LLM execution, and SQLite message logging.
 
 ## Deliverable / Acceptance Criteria
 

@@ -148,7 +148,7 @@ func (m *Manager) Search(query string, memoryType string, tier string, limit int
 	}
 	defer rows.Close()
 
-	var results []MemoryItem
+	results := make([]MemoryItem, 0)
 	now := time.Now().UTC()
 
 	for rows.Next() {

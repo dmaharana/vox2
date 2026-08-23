@@ -11,6 +11,7 @@ import (
 
 	"go-harness/pkg/config"
 	"go-harness/pkg/db"
+	"go-harness/pkg/mcp"
 	"go-harness/pkg/memory"
 	"go-harness/pkg/skills"
 	"go-harness/pkg/tools"
@@ -31,6 +32,7 @@ type Server struct {
 	memoryMgr    *memory.Manager
 	skillsLoader *skills.Loader
 	toolsReg     *tools.Registry
+	mcpMgr       *mcp.Manager
 	httpServer   *http.Server
 	spaFS        fs.FS
 }
@@ -41,6 +43,7 @@ type ServerOptions struct {
 	MemoryMgr    *memory.Manager
 	SkillsLoader *skills.Loader
 	ToolsReg     *tools.Registry
+	MCPMgr       *mcp.Manager
 	SpaFS        fs.FS
 }
 
@@ -58,6 +61,7 @@ func New(cfg *config.Config, hub *ws.Hub, opts ...ServerOptions) *Server {
 		s.memoryMgr = opt.MemoryMgr
 		s.skillsLoader = opt.SkillsLoader
 		s.toolsReg = opt.ToolsReg
+		s.mcpMgr = opt.MCPMgr
 		s.spaFS = opt.SpaFS
 	}
 
@@ -109,6 +113,13 @@ func (s *Server) setupRoutes() {
 		r.Post("/tools/{name}/toggle", s.handleToggleTool)
 		r.Get("/skills", s.handleListSkills)
 		r.Post("/skills/{name}/toggle", s.handleToggleSkill)
+
+		// MCP Servers
+		r.Get("/mcp/servers", s.handleListMCPServers)
+		r.Post("/mcp/servers", s.handleAddMCPServer)
+		r.Post("/mcp/servers/{id}/connect", s.handleConnectMCPServer)
+		r.Post("/mcp/servers/{id}/disconnect", s.handleDisconnectMCPServer)
+		r.Delete("/mcp/servers/{id}", s.handleDeleteMCPServer)
 	})
 
 	if s.hub != nil {
@@ -424,6 +435,88 @@ func (s *Server) handleToggleSkill(w http.ResponseWriter, r *http.Request) {
 	ok := s.skillsLoader.SetEnabled(name, req.Enabled)
 	if !ok {
 		http.Error(w, "Skill not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// -------------------------------------------------------------
+// MCP Server Handlers
+// -------------------------------------------------------------
+
+func (s *Server) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
+	if s.mcpMgr == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]mcp.ServerConfig{})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.mcpMgr.ListServers())
+}
+
+func (s *Server) handleAddMCPServer(w http.ResponseWriter, r *http.Request) {
+	if s.mcpMgr == nil {
+		http.Error(w, "MCP manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var cfg mcp.ServerConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	res, err := s.mcpMgr.AddServer(cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Auto-connect if enabled
+	if res.Enabled {
+		_ = s.mcpMgr.ConnectServer(r.Context(), res.ID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+func (s *Server) handleConnectMCPServer(w http.ResponseWriter, r *http.Request) {
+	if s.mcpMgr == nil {
+		http.Error(w, "MCP manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.mcpMgr.ConnectServer(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func (s *Server) handleDisconnectMCPServer(w http.ResponseWriter, r *http.Request) {
+	if s.mcpMgr == nil {
+		http.Error(w, "MCP manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.mcpMgr.DisconnectServer(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
+	if s.mcpMgr == nil {
+		http.Error(w, "MCP manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.mcpMgr.DeleteServer(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

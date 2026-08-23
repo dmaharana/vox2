@@ -68,7 +68,7 @@ func (d *DB) ListConversations() ([]Conversation, error) {
 	}
 	defer rows.Close()
 
-	var result []Conversation
+	result := make([]Conversation, 0)
 	for rows.Next() {
 		var c Conversation
 		if err := rows.Scan(&c.ID, &c.Title, &c.CreatedAt, &c.UpdatedAt); err != nil {
@@ -138,7 +138,7 @@ func (d *DB) GetMessages(conversationID string) ([]Message, error) {
 	}
 	defer rows.Close()
 
-	var messages []Message
+	messages := make([]Message, 0)
 	for rows.Next() {
 		var m Message
 		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.ToolCalls, &m.CreatedAt); err != nil {

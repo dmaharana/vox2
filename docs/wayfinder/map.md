@@ -1,7 +1,7 @@
 # Map: Go Agent Harness with Embedded Shadcn SPA
 
 **Label:** `wayfinder:map`  
-**Status:** In Progress  
+**Status:** Completed  
 
 ## Destination
 
@@ -13,7 +13,7 @@ A production-ready, modular Go-based AI agent harness with an embedded React (Vi
 - **Key Architectural Decisions:**
   - Backend: Go 1.26+ with `go-chi/chi/v5`, `rs/zerolog`, and `embed.FS` for single-binary distribution.
   - LLM SDK: Standard robust OpenAI-compatible Go SDK (`github.com/sashabaranov/go-openai`) / Google Gen AI SDK / Genkit for streaming and function calling.
-  - MCP SDK: Official / standard MCP Go SDK (`github.com/modelcontextprotocol/go-sdk` / `github.com/mark3labs/mcp-go`) for stdio and SSE client transports.
+  - MCP SDK: Official MCP Go SDK (`github.com/modelcontextprotocol/go-sdk`) for stdio and SSE client transports.
   - Streaming Protocol: WebSockets for bidirectional full-duplex communication (streaming tokens, tool progress, cancellations).
   - Memory Engine: Pure SQLite with FTS5 virtual tables for keyword/tag search, metadata tracking (`last_used`, hit counts), and automated long-term memory promotion.
   - Flow Orchestration: Agent tool-driven (`spawn_parallel_flow`) running sub-agent flows concurrently with fan-in summarization.
@@ -28,13 +28,14 @@ A production-ready, modular Go-based AI agent harness with an embedded React (Vi
 - [[Ticket 002] OpenTelemetry Tracing Pipeline](tickets/002-opentelemetry-tracing-subsystem.md): Configurable tracer provider with console, file, OTLP exporters, and span helpers for LLM, tools, skills, and flows.
 - [[Ticket 003] Built-in Tools & Dynamic Skills Loader](tickets/003-built-in-tools-and-skills-engine.md): File tools (read/write/update/list), dynamic `skills/` loader, prompt injection, and unified tool registry.
 - [[Ticket 004] SQLite Persistence: Conversations & FTS5 Tiered Memory](tickets/004-sqlite-conversation-and-fts5-memory.md): SQLite schema with WAL mode, conversation CRUD + CSV export, and cognitive tiered memory with FTS5 search and aging promotion.
+- [[Ticket 005] MCP Client Integration (Stdio & HTTP)](tickets/005-mcp-stdio-and-http-integration.md): Official MCP client integration (`github.com/modelcontextprotocol/go-sdk`), stdio and SSE transports, tool/prompt/resource discovery and REST management.
+- [[Ticket 006] Parallel Subflow Orchestration Engine](tickets/006-parallel-flow-orchestration.md): Concurrent sub-agent worker pool, real-time WebSocket progress, OTel hierarchy, and `spawn_parallel_flow` summarization tool.
+- [[Ticket 007] OpenAI-Compatible LLM Client & Chat Loop](tickets/007-llm-orchestration-and-chat-loop.md): Configurable OpenAI streaming client, multi-turn tool execution loop, system prompt memory/skill assembly, and WebSocket broadcasting.
+- [[Ticket 008] Embedded React (Shadcn/UI) SPA & Complete Control UI](tickets/008-embedded-react-shadcn-spa.md): Full React + Tailwind + Radix UI / Shadcn dashboard, LLM/MCP/Skills/Memory modals, CSV export, live streaming chat, and disclaimer footer embedded in single Go binary.
 
 ## Frontier & Open Tickets
 
-1. [[Ticket 005] MCP Client Integration (Stdio & HTTP)](tickets/005-mcp-stdio-and-http-integration.md) (Unblocked - Frontier)
-2. [[Ticket 006] Parallel Subflow Orchestration Engine](tickets/006-parallel-flow-orchestration.md) (Unblocked - Frontier)
-3. [[Ticket 007] OpenAI-Compatible LLM Client & Chat Loop](tickets/007-llm-orchestration-and-chat-loop.md) (Blocked by Ticket 005, Ticket 006)
-4. [[Ticket 008] Embedded React (Shadcn/UI) SPA & Complete Control UI](tickets/008-embedded-react-shadcn-spa.md) (Blocked by Ticket 007)
+*All tickets resolved.*
 
 ## Not yet specified
 
