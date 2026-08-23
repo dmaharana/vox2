@@ -291,12 +291,15 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                     </span>
                   ) : (
-                    <span className="h-2.5 w-2.5 rounded-full bg-destructive"></span>
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                    </span>
                   )}
                 </div>
               </TooltipTrigger>
               <TooltipContent side="right" className="text-xs font-medium">
-                {wsConnected ? 'WebSocket: Connected (Live)' : 'WebSocket: Offline / Reconnecting'}
+                {wsConnected ? 'WebSocket: Connected (Live)' : 'WebSocket: Disconnected (Auto-Reconnecting...)'}
               </TooltipContent>
             </Tooltip>
           ) : (
@@ -308,10 +311,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                   </span>
                 ) : (
-                  <span className="h-2 w-2 rounded-full bg-destructive"></span>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                  </span>
                 )}
-                <span className="text-muted-foreground font-medium">
-                  {wsConnected ? 'Connected' : 'Offline'}
+                <span className={`font-medium ${wsConnected ? 'text-muted-foreground' : 'text-amber-500'}`}>
+                  {wsConnected ? 'Connected' : 'Reconnecting...'}
                 </span>
               </div>
               <span className="text-[10px] font-mono text-muted-foreground/80">WS:8080</span>

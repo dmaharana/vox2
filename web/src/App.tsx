@@ -48,39 +48,73 @@ export function AppContent() {
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
-  // Connect WebSocket
+  // Connect & Auto-Reconnect WebSocket
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host || 'localhost:8080'
-    const wsUrl = `${protocol}//${host}/ws`
+    let reconnectTimeout: ReturnType<typeof setTimeout>
+    let isUnmounted = false
+    let retryDelay = 1000
 
-    const ws = new WebSocket(wsUrl)
-    wsRef.current = ws
+    const connect = () => {
+      if (isUnmounted) return
 
-    ws.onopen = () => {
-      setWsConnected(true)
-    }
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const host = window.location.host || 'localhost:8080'
+      const wsUrl = `${protocol}//${host}/ws`
 
-    ws.onclose = () => {
-      setWsConnected(false)
-    }
-
-    ws.onerror = (e) => {
-      console.error('WebSocket error:', e)
-      setWsConnected(false)
-    }
-
-    ws.onmessage = (evt) => {
       try {
-        const msg = JSON.parse(evt.data)
-        handleWebSocketMessage(msg)
+        const ws = new WebSocket(wsUrl)
+        wsRef.current = ws
+
+        ws.onopen = () => {
+          if (isUnmounted) return
+          setWsConnected(true)
+          retryDelay = 1000 // Reset backoff on successful connection
+        }
+
+        ws.onclose = () => {
+          if (isUnmounted) return
+          setWsConnected(false)
+          // Schedule auto-reconnect with exponential backoff (capped at 8s)
+          clearTimeout(reconnectTimeout)
+          reconnectTimeout = setTimeout(() => {
+            retryDelay = Math.min(retryDelay * 1.5, 8000)
+            connect()
+          }, retryDelay)
+        }
+
+        ws.onerror = () => {
+          if (isUnmounted) return
+          setWsConnected(false)
+          ws.close()
+        }
+
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data)
+            handleWebSocketMessage(msg)
+          } catch (err) {
+            console.error('Failed to parse WebSocket message:', err)
+          }
+        }
       } catch (err) {
-        console.error('Failed to parse WebSocket message:', err)
+        if (isUnmounted) return
+        setWsConnected(false)
+        clearTimeout(reconnectTimeout)
+        reconnectTimeout = setTimeout(() => {
+          retryDelay = Math.min(retryDelay * 1.5, 8000)
+          connect()
+        }, retryDelay)
       }
     }
 
+    connect()
+
     return () => {
-      ws.close()
+      isUnmounted = true
+      clearTimeout(reconnectTimeout)
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
     }
   }, [])
 
