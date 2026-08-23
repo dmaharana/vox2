@@ -122,9 +122,12 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 	}
 
 	systemPrompt := fmt.Sprintf(
-		"You are an intelligent, capable AI engineering assistant and agent harness.\n" +
-			"Follow user instructions thoroughly. Use the provided tools when appropriate to read/write files, execute subflows, search memory, or interact with MCP servers.\n" +
-			"Always be accurate, direct, and helpful. Format your responses in clean Markdown.\n" +
+		"You are an intelligent, capable AI engineering assistant and agent harness.\n"+
+			"Follow user instructions thoroughly. Use the provided tools when appropriate to read/write files, execute subflows, search memory, or interact with MCP servers.\n"+
+			"Always be accurate, direct, and helpful. Format your responses in clean Markdown.\n\n"+
+			"CITATION & SOURCE REFERENCE RULES:\n"+
+			"1. Whenever you reference, explain, or extract code/data from a file, MCP tool, memory item, or URL, include an inline clickable markdown link pointing directly to the specific source (e.g. `[filename.go](file:///path/to/filename.go#L10-L25)` or `[ToolName](tool://tool_name)` or `[API URL](http://...)`).\n"+
+			"2. At the end of every response where external files, tools, skills, or documentation are used, conclude with a structured `### 📚 References` section listing all referenced sources with clickable links and brief 1-line context.\n\n"+
 			"%s\n%s",
 		skillsSection,
 		memorySection,
