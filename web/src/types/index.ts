@@ -22,6 +22,7 @@ export interface MCPServer {
   args?: string[]
   env?: Record<string, string>
   url?: string
+  headers?: Record<string, string>
   enabled: boolean
   status: 'connected' | 'disconnected' | 'error'
   last_error?: string

@@ -68,6 +68,18 @@ export async function addMCPServer(server: Partial<MCPServer>): Promise<MCPServe
   return res.json()
 }
 
+export async function updateMCPServer(id: string, server: Partial<MCPServer>): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/mcp/servers/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(server),
+  })
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(err || 'Failed to update MCP server')
+  }
+}
+
 export async function connectMCPServer(id: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/mcp/servers/${id}/connect`, { method: 'POST' })
   if (!res.ok) {

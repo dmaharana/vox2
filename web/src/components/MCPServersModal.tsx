@@ -3,6 +3,7 @@ import { MCPServer } from '../types'
 import {
   fetchMCPServers,
   addMCPServer,
+  updateMCPServer,
   connectMCPServer,
   disconnectMCPServer,
   deleteMCPServer,
@@ -18,7 +19,7 @@ import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs'
 import { Badge } from './ui/badge'
-import { Server, Plus, Trash2, Plug, Unplug, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react'
+import { Server, Plus, Trash2, Plug, Unplug, CheckCircle, AlertCircle, RefreshCw, Pencil, X } from 'lucide-react'
 
 interface Props {
   open: boolean
@@ -29,14 +30,16 @@ export const MCPServersModal: React.FC<Props> = ({ open, onOpenChange }) => {
   const [servers, setServers] = useState<MCPServer[]>([])
   const [loading, setLoading] = useState(false)
 
-  // Form State
+  // Form & Edit State
+  const [editingServerId, setEditingServerId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<'stdio' | 'sse'>('stdio')
   const [command, setCommand] = useState('')
   const [argsStr, setArgsStr] = useState('')
   const [url, setUrl] = useState('')
   const [envStr, setEnvStr] = useState('')
-  const [isAdding, setIsAdding] = useState(false)
+  const [headersStr, setHeadersStr] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const loadServers = async () => {
     setLoading(true)
@@ -54,9 +57,34 @@ export const MCPServersModal: React.FC<Props> = ({ open, onOpenChange }) => {
     }
   }, [open])
 
-  const handleAdd = async (e: React.FormEvent) => {
+  const handleStartEdit = (s: MCPServer) => {
+    setEditingServerId(s.id)
+    setName(s.name)
+    setTransport(s.transport === 'sse' || s.transport === 'http' ? 'sse' : 'stdio')
+    setCommand(s.command || '')
+    setArgsStr((s.args || []).join(' '))
+    setUrl(s.url || '')
+    setEnvStr(
+      s.env ? Object.entries(s.env).map(([k, v]) => `${k}=${v}`).join(', ') : ''
+    )
+    setHeadersStr(
+      s.headers ? Object.entries(s.headers).map(([k, v]) => `${k}=${v}`).join(', ') : ''
+    )
+  }
+
+  const handleCancelEdit = () => {
+    setEditingServerId(null)
+    setName('')
+    setCommand('')
+    setArgsStr('')
+    setUrl('')
+    setEnvStr('')
+    setHeadersStr('')
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setIsAdding(true)
+    setIsSubmitting(true)
     try {
       const args = argsStr.trim() ? argsStr.trim().split(' ') : []
       const env: Record<string, string> = {}
@@ -67,27 +95,44 @@ export const MCPServersModal: React.FC<Props> = ({ open, onOpenChange }) => {
         })
       }
 
-      await addMCPServer({
+      const headers: Record<string, string> = {}
+      if (headersStr.trim()) {
+        headersStr.split(/[\n,]+/).forEach((pair) => {
+          let sepIdx = pair.indexOf(':')
+          if (sepIdx === -1) {
+            sepIdx = pair.indexOf('=')
+          }
+          if (sepIdx !== -1) {
+            const k = pair.substring(0, sepIdx).trim()
+            const v = pair.substring(sepIdx + 1).trim()
+            if (k && v) headers[k] = v
+          }
+        })
+      }
+
+      const payload = {
         name,
         transport,
         command: transport === 'stdio' ? command : undefined,
         args: transport === 'stdio' ? args : undefined,
         env: transport === 'stdio' ? env : undefined,
         url: transport === 'sse' ? url : undefined,
+        headers: transport === 'sse' && Object.keys(headers).length > 0 ? headers : undefined,
         enabled: true,
-      })
+      }
 
-      // Reset form
-      setName('')
-      setCommand('')
-      setArgsStr('')
-      setUrl('')
-      setEnvStr('')
+      if (editingServerId) {
+        await updateMCPServer(editingServerId, payload)
+      } else {
+        await addMCPServer(payload)
+      }
+
+      handleCancelEdit()
       await loadServers()
     } catch (err: any) {
       alert(err.message)
     } finally {
-      setIsAdding(false)
+      setIsSubmitting(false)
     }
   }
 
@@ -165,9 +210,19 @@ export const MCPServersModal: React.FC<Props> = ({ open, onOpenChange }) => {
                         ? `${s.command} ${(s.args || []).join(' ')}`
                         : s.url}
                     </div>
+                    {s.headers && Object.keys(s.headers).length > 0 && (
+                      <div className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5 flex-wrap">
+                        <span className="font-semibold text-foreground/80 text-[10px]">Headers:</span>
+                        {Object.keys(s.headers).map((k) => (
+                          <Badge key={k} variant="outline" className="text-[10px] py-0 px-1 font-mono">
+                            {k}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <Button
                       size="sm"
                       variant={s.status === 'connected' ? 'secondary' : 'default'}
@@ -186,6 +241,15 @@ export const MCPServersModal: React.FC<Props> = ({ open, onOpenChange }) => {
                     <Button
                       size="icon"
                       variant="ghost"
+                      title="Edit Server Configuration"
+                      className="hover:bg-primary/10 text-primary"
+                      onClick={() => handleStartEdit(s)}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
                       className="text-destructive hover:bg-destructive/10"
                       onClick={() => handleDelete(s.id)}
                     >
@@ -198,13 +262,28 @@ export const MCPServersModal: React.FC<Props> = ({ open, onOpenChange }) => {
           )}
         </div>
 
-        {/* Add New Server Form */}
+        {/* Add / Edit Server Form */}
         <div className="border-t pt-4 mt-4">
-          <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-            <Plus className="w-4 h-4 text-primary" /> Add New MCP Server
-          </h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              {editingServerId ? (
+                <>
+                  <Pencil className="w-4 h-4 text-primary" /> Edit MCP Server Configuration
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4 text-primary" /> Add New MCP Server
+                </>
+              )}
+            </h3>
+            {editingServerId && (
+              <Button size="sm" variant="ghost" onClick={handleCancelEdit} className="h-7 text-xs gap-1">
+                <X className="w-3.5 h-3.5" /> Cancel Edit
+              </Button>
+            )}
+          </div>
 
-          <form onSubmit={handleAdd} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="srvName">Server Name</Label>
               <Input
@@ -264,11 +343,29 @@ export const MCPServersModal: React.FC<Props> = ({ open, onOpenChange }) => {
                     required={transport === 'sse'}
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="headers">Custom HTTP Headers (KEY=VAL or Key: Value, comma/newline separated)</Label>
+                  <Input
+                    id="headers"
+                    placeholder="Authorization=Bearer secret_token, X-API-Key=custom123"
+                    value={headersStr}
+                    onChange={(e) => setHeadersStr(e.target.value)}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Sent with every SSE/HTTP request (e.g. Authorization, X-API-Key, session cookies, etc.).
+                  </p>
+                </div>
               </TabsContent>
             </Tabs>
 
-            <Button type="submit" className="w-full" disabled={isAdding}>
-              {isAdding ? 'Adding & Connecting...' : 'Add & Connect MCP Server'}
+            <Button type="submit" className="w-full" disabled={isSubmitting}>
+              {isSubmitting
+                ? editingServerId
+                  ? 'Updating & Reconnecting...'
+                  : 'Adding & Connecting...'
+                : editingServerId
+                ? 'Update MCP Server'
+                : 'Add & Connect MCP Server'}
             </Button>
           </form>
         </div>
