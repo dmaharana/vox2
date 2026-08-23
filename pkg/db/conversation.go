@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/csv"
 	"fmt"
 	"time"
@@ -19,12 +20,15 @@ type Conversation struct {
 
 // Message represents an individual turn in a conversation.
 type Message struct {
-	ID             string    `json:"id"`
-	ConversationID string    `json:"conversation_id"`
-	Role           string    `json:"role"` // "user", "assistant", "system", "tool"
-	Content        string    `json:"content"`
-	ToolCalls      string    `json:"tool_calls,omitempty"` // JSON serialized tool calls if any
-	CreatedAt      time.Time `json:"created_at"`
+	ID                string    `json:"id"`
+	ConversationID    string    `json:"conversation_id"`
+	Role              string    `json:"role"` // "user", "assistant", "system", "tool"
+	Content           string    `json:"content"`
+	ToolCalls         string    `json:"tool_calls,omitempty"`         // JSON serialized tool calls if any
+	Subflows          string    `json:"subflows,omitempty"`           // JSON serialized subflow events
+	MemoriesRetrieved string    `json:"memories_retrieved,omitempty"` // JSON serialized memory items
+	TraceID           string    `json:"trace_id,omitempty"`           // OpenTelemetry Trace ID
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 // CreateConversation creates a new conversation with a title.
@@ -118,8 +122,8 @@ func (d *DB) AddMessage(m Message) error {
 			m.ConversationID, title, now, now)
 	}
 
-	query := `INSERT INTO messages (id, conversation_id, role, content, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err = d.db.Exec(query, m.ID, m.ConversationID, m.Role, m.Content, m.ToolCalls, m.CreatedAt)
+	query := `INSERT INTO messages (id, conversation_id, role, content, tool_calls, subflows, memories_retrieved, trace_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.db.Exec(query, m.ID, m.ConversationID, m.Role, m.Content, m.ToolCalls, m.Subflows, m.MemoriesRetrieved, m.TraceID, m.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert message: %w", err)
 	}
@@ -131,7 +135,7 @@ func (d *DB) AddMessage(m Message) error {
 
 // GetMessages retrieves all messages for a conversation ordered chronologically.
 func (d *DB) GetMessages(conversationID string) ([]Message, error) {
-	query := `SELECT id, conversation_id, role, content, tool_calls, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC`
+	query := `SELECT id, conversation_id, role, content, tool_calls, subflows, memories_retrieved, trace_id, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC`
 	rows, err := d.db.Query(query, conversationID)
 	if err != nil {
 		return nil, err
@@ -141,8 +145,21 @@ func (d *DB) GetMessages(conversationID string) ([]Message, error) {
 	messages := make([]Message, 0)
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.ToolCalls, &m.CreatedAt); err != nil {
+		var toolCalls, subflows, memories, traceID sql.NullString
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &toolCalls, &subflows, &memories, &traceID, &m.CreatedAt); err != nil {
 			return nil, err
+		}
+		if toolCalls.Valid {
+			m.ToolCalls = toolCalls.String
+		}
+		if subflows.Valid {
+			m.Subflows = subflows.String
+		}
+		if memories.Valid {
+			m.MemoriesRetrieved = memories.String
+		}
+		if traceID.Valid {
+			m.TraceID = traceID.String
 		}
 		messages = append(messages, m)
 	}
@@ -160,7 +177,7 @@ func (d *DB) ExportConversationCSV(conversationID string) (string, error) {
 	writer := csv.NewWriter(&buf)
 
 	// Write CSV Header
-	if err := writer.Write([]string{"ID", "ConversationID", "Role", "Content", "ToolCalls", "CreatedAt"}); err != nil {
+	if err := writer.Write([]string{"ID", "ConversationID", "Role", "Content", "ToolCalls", "Subflows", "Memories", "TraceID", "CreatedAt"}); err != nil {
 		return "", err
 	}
 
@@ -171,6 +188,9 @@ func (d *DB) ExportConversationCSV(conversationID string) (string, error) {
 			m.Role,
 			m.Content,
 			m.ToolCalls,
+			m.Subflows,
+			m.MemoriesRetrieved,
+			m.TraceID,
 			m.CreatedAt.Format(time.RFC3339),
 		}
 		if err := writer.Write(record); err != nil {

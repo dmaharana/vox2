@@ -74,6 +74,9 @@ func (d *DB) migrate() error {
 		role TEXT NOT NULL,
 		content TEXT NOT NULL,
 		tool_calls TEXT DEFAULT '',
+		subflows TEXT DEFAULT '',
+		memories_retrieved TEXT DEFAULT '',
+		trace_id TEXT DEFAULT '',
 		created_at DATETIME NOT NULL,
 		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 	);
@@ -140,5 +143,14 @@ func (d *DB) migrate() error {
 	`
 
 	_, err := d.db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Schema column upgrades for existing databases
+	_, _ = d.db.Exec(`ALTER TABLE messages ADD COLUMN subflows TEXT DEFAULT ''`)
+	_, _ = d.db.Exec(`ALTER TABLE messages ADD COLUMN memories_retrieved TEXT DEFAULT ''`)
+	_, _ = d.db.Exec(`ALTER TABLE messages ADD COLUMN trace_id TEXT DEFAULT ''`)
+
+	return nil
 }

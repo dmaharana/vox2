@@ -90,9 +90,11 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 
 	// 2. Query relevant memory context (FTS5 search)
 	var memorySection string
+	var retrievedMemories []memory.MemoryItem
 	if o.memoryMgr != nil && msg.Content != "" {
 		memories, err := o.memoryMgr.Search(msg.Content, "", "", 5)
 		if err == nil && len(memories) > 0 {
+			retrievedMemories = memories
 			var sb strings.Builder
 			sb.WriteString("\n## Relevant Memories & Context\n")
 			for _, m := range memories {
@@ -122,9 +124,14 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 	}
 
 	systemPrompt := fmt.Sprintf(
-		"You are an intelligent, capable AI engineering assistant and agent harness.\n"+
-			"Follow user instructions thoroughly. Use the provided tools when appropriate to read/write files, execute subflows, search memory, or interact with MCP servers.\n"+
+		"You are Vox2, an advanced, intelligent AI engineering assistant and agent harness.\n"+
+			"Follow user instructions thoroughly. Use the provided tools when appropriate to read/write files, execute subflows, search memory, save memory, or interact with MCP servers.\n"+
 			"Always be accurate, direct, and helpful. Format your responses in clean Markdown.\n\n"+
+			"COGNITIVE MEMORY & SEARCH CACHE RULES:\n"+
+			"1. Actively identify important user preferences, developer conventions, project architecture rules, tech stack facts, or reusable procedures shared during the conversation.\n"+
+			"2. When the user explicitly asks you to remember something (e.g. 'remember that ...', 'my preference is ...', 'save this ...'), or when you discover crucial project facts, synthesis from key searches, or instructions that should persist across sessions, proactively invoke the `save_memory` tool.\n"+
+			"3. External search tools (e.g. web search, file search, scrapers) are automatically indexed into the short-term `semantic_cache` tier. For important research discoveries, explicitly call `save_memory` with `memory_type: 'semantic'` or `'procedural'` to persist the high-level conclusions into long-term memory.\n"+
+			"4. Use `search_memory` if you need to query past memories, cached search outcomes, or context beyond what was automatically injected.\n\n"+
 			"CITATION & SOURCE REFERENCE RULES:\n"+
 			"1. Whenever you reference, explain, or extract code/data from a file, MCP tool, memory item, or URL, include an inline clickable markdown link pointing directly to the specific source (e.g. `[filename.go](file:///path/to/filename.go#L10-L25)` or `[ToolName](tool://tool_name)` or `[API URL](http://...)`).\n"+
 			"2. At the end of every response where external files, tools, skills, or documentation are used, conclude with a structured `### 📚 References` section listing all referenced sources with clickable links and brief 1-line context.\n\n"+
@@ -169,6 +176,8 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 	maxTurns := 10
 	currentTurn := 0
 	var finalAssistantText strings.Builder
+	var turnToolCallStates []ws.ToolCallPayload
+	var turnSubflowStates []ws.SubflowPayload
 
 	for currentTurn < maxTurns {
 		currentTurn++
@@ -281,6 +290,13 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			var resStr string
 			if execErr != nil {
 				resStr = fmt.Sprintf("Error executing tool %s: %v", toolName, execErr)
+				turnToolCallStates = append(turnToolCallStates, ws.ToolCallPayload{
+					ID:        toolCallID,
+					Tool:      toolName,
+					Arguments: string(argsJSON),
+					Status:    "failed",
+					Error:     execErr.Error(),
+				})
 				if wsClient != nil {
 					wsClient.Send(ws.OutboundMessage{
 						Type:           ws.TypeToolCall,
@@ -296,6 +312,13 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			} else {
 				resBytes, _ := json.Marshal(execRes)
 				resStr = string(resBytes)
+				turnToolCallStates = append(turnToolCallStates, ws.ToolCallPayload{
+					ID:        toolCallID,
+					Tool:      toolName,
+					Arguments: string(argsJSON),
+					Status:    "completed",
+					Result:    execRes,
+				})
 				if wsClient != nil {
 					wsClient.Send(ws.OutboundMessage{
 						Type:           ws.TypeToolCall,
@@ -306,6 +329,47 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 							Status: "completed",
 							Result: execRes,
 						},
+					})
+
+					if toolName == "save_memory" {
+						wsClient.Send(ws.OutboundMessage{
+							Type:           ws.TypeMemoryEvent,
+							ConversationID: convID,
+							Payload: ws.MemoryPayload{
+								Action: "saved",
+								Count:  1,
+							},
+						})
+					}
+				}
+
+				// Auto-save key searches to semantic cache tier
+				if o.memoryMgr != nil && execErr == nil && toolName != "search_memory" &&
+					(strings.Contains(strings.ToLower(toolName), "search") || strings.Contains(strings.ToLower(toolName), "scraper") || strings.Contains(strings.ToLower(toolName), "tavily")) {
+					var queryKey string
+					var inArgs map[string]any
+					if err := json.Unmarshal(argsJSON, &inArgs); err == nil {
+						if q, ok := inArgs["query"].(string); ok && q != "" {
+							queryKey = q
+						} else if q, ok := inArgs["pattern"].(string); ok && q != "" {
+							queryKey = q
+						} else if q, ok := inArgs["url"].(string); ok && q != "" {
+							queryKey = q
+						}
+					}
+					if queryKey == "" {
+						queryKey = toolName
+					}
+					contentSummary := resStr
+					if len(contentSummary) > 800 {
+						contentSummary = contentSummary[:800] + "..."
+					}
+					_ = o.memoryMgr.Save(&memory.MemoryItem{
+						Key:        fmt.Sprintf("Search: %s", queryKey),
+						Content:    contentSummary,
+						MemoryType: memory.TypeSemanticCache,
+						Tier:       memory.TierShortTerm,
+						Tags:       fmt.Sprintf("search,%s", toolName),
 					})
 				}
 			}
@@ -319,12 +383,38 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 		}
 	}
 
-	// 6. Save final assistant response to DB
-	if o.db != nil && finalAssistantText.Len() > 0 {
+	// 6. Save final assistant response to DB with all traces, tool calls, and subflows
+	if o.db != nil && (finalAssistantText.Len() > 0 || len(turnToolCallStates) > 0) {
+		var toolCallsJSON, memoriesJSON, subflowsJSON string
+		if len(turnToolCallStates) > 0 {
+			if b, err := json.Marshal(turnToolCallStates); err == nil {
+				toolCallsJSON = string(b)
+			}
+		}
+		if len(retrievedMemories) > 0 {
+			if b, err := json.Marshal(retrievedMemories); err == nil {
+				memoriesJSON = string(b)
+			}
+		}
+		if len(turnSubflowStates) > 0 {
+			if b, err := json.Marshal(turnSubflowStates); err == nil {
+				subflowsJSON = string(b)
+			}
+		}
+
+		traceID := ""
+		if span.SpanContext().HasTraceID() {
+			traceID = span.SpanContext().TraceID().String()
+		}
+
 		_ = o.db.AddMessage(db.Message{
-			ConversationID: convID,
-			Role:           "assistant",
-			Content:        finalAssistantText.String(),
+			ConversationID:    convID,
+			Role:              "assistant",
+			Content:           finalAssistantText.String(),
+			ToolCalls:         toolCallsJSON,
+			Subflows:          subflowsJSON,
+			MemoriesRetrieved: memoriesJSON,
+			TraceID:           traceID,
 		})
 	}
 
