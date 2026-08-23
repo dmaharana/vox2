@@ -117,10 +117,11 @@ flowchart TD
         OTel["OpenTelemetry SDK (Console/File/OTLP)"]
     end
 
-    subgraph Storage ["SQLite Database"]
+    subgraph Storage ["SQLite Database (data/harness.db)"]
         DBConv["Conversations & Messages"]
-        DBMem["Tiered Cognitive Memories"]
-        FTS5["SQLite FTS5 Virtual Index"]
+        DBMem["Tiered Cognitive Memories & FTS5 Index"]
+        DBSettings["Runtime LLM & System Settings"]
+        DBMCP["Persistent MCP Server Configurations"]
     end
 
     UI <--> WSClient

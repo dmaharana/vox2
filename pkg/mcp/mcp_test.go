@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"go-harness/pkg/tools"
@@ -53,21 +56,71 @@ func TestMCPManagerConfig(t *testing.T) {
 	}
 }
 
-func TestSanitizeName(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"My Server 123", "my_server_123"},
-		{"filesystem-tool", "filesystem_tool"},
-		{"---special@@chars---", "special_chars"},
-		{"", "server"},
+func TestHeaderRoundTripper(t *testing.T) {
+	customHeaders := map[string]string{
+		"Authorization": "Bearer test-secret-token",
+		"X-API-Key":     "key-12345",
+		"Custom-Header": "custom-value",
 	}
 
-	for _, tt := range tests {
-		got := sanitizeName(tt.in)
-		if got != tt.want {
-			t.Errorf("sanitizeName(%q) = %q, want %q", tt.in, got, tt.want)
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range customHeaders {
+			got := r.Header.Get(k)
+			if got != v {
+				t.Errorf("Header %s mismatch: got %q, want %q", k, got, v)
+			}
 		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockServer.Close()
+
+	client := &http.Client{
+		Transport: &headerRoundTripper{
+			headers: customHeaders,
+			rt:      http.DefaultTransport,
+		},
 	}
+
+	req, _ := http.NewRequest("GET", mockServer.URL, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 OK, got %d", resp.StatusCode)
+	}
+}
+
+func TestConnectManagerLocal(t *testing.T) {
+	// Check if local 8090 server is running
+	checkResp, err := http.Get("http://localhost:8090/mcp")
+	if err != nil {
+		t.Skip("local MCP server at :8090 not running, skipping test")
+	}
+	checkResp.Body.Close()
+
+	reg := tools.NewRegistry()
+	mgr := NewManager(reg)
+
+	srv, err := mgr.AddServer(ServerConfig{
+		Name:      "Local Users DB MCP",
+		Transport: "http",
+		URL:       "http://localhost:8090/mcp",
+	})
+	if err != nil {
+		t.Fatalf("AddServer failed: %v", err)
+	}
+
+	err = mgr.ConnectServer(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatalf("ConnectServer failed: %v", err)
+	}
+
+	toolsList := reg.List()
+	if len(toolsList) == 0 {
+		t.Fatalf("Expected discovered tools from local MCP server, got 0")
+	}
+	t.Logf("Successfully registered %d MCP tools in tool registry", len(toolsList))
 }

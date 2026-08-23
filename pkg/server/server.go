@@ -117,6 +117,7 @@ func (s *Server) setupRoutes() {
 		// MCP Servers
 		r.Get("/mcp/servers", s.handleListMCPServers)
 		r.Post("/mcp/servers", s.handleAddMCPServer)
+		r.Put("/mcp/servers/{id}", s.handleUpdateMCPServer)
 		r.Post("/mcp/servers/{id}/connect", s.handleConnectMCPServer)
 		r.Post("/mcp/servers/{id}/disconnect", s.handleDisconnectMCPServer)
 		r.Delete("/mcp/servers/{id}", s.handleDeleteMCPServer)
@@ -222,6 +223,9 @@ func (s *Server) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cfg.Update(current)
+	if s.db != nil {
+		_ = s.cfg.SaveToDB(s.db)
+	}
 	s.handleGetSettings(w, r)
 }
 
@@ -479,6 +483,28 @@ func (s *Server) handleAddMCPServer(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+func (s *Server) handleUpdateMCPServer(w http.ResponseWriter, r *http.Request) {
+	if s.mcpMgr == nil {
+		http.Error(w, "MCP manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var cfg mcp.ServerConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+	cfg.ID = id
+
+	if err := s.mcpMgr.UpdateServer(cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
 func (s *Server) handleConnectMCPServer(w http.ResponseWriter, r *http.Request) {

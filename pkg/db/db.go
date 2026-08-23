@@ -115,6 +115,28 @@ func (d *DB) migrate() error {
 		INSERT INTO memories_fts(id, key, content, tags)
 		VALUES (new.id, new.key, new.content, new.tags);
 	END;
+
+	-- Settings table for persisting runtime configuration
+	CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL,
+		updated_at DATETIME NOT NULL
+	);
+
+	-- MCP Servers table for persisting MCP configurations
+	CREATE TABLE IF NOT EXISTS mcp_servers (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		transport TEXT NOT NULL,
+		command TEXT DEFAULT '',
+		args TEXT DEFAULT '[]',
+		env TEXT DEFAULT '{}',
+		url TEXT DEFAULT '',
+		headers TEXT DEFAULT '{}',
+		enabled INTEGER DEFAULT 1,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	);
 	`
 
 	_, err := d.db.Exec(schema)

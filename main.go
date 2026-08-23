@@ -60,6 +60,11 @@ func main() {
 	}
 	defer database.Close()
 
+	// Restore runtime settings from SQLite database if previously saved
+	if err := cfg.LoadFromDB(database); err != nil {
+		log.Warn().Err(err).Msg("Failed to load settings from database")
+	}
+
 	// 5. Initialize Cognitive Memory Manager
 	memMgr := memory.NewManager(database)
 
@@ -78,8 +83,11 @@ func main() {
 	// Register cognitive memory tools
 	memMgr.RegisterMemoryTools(toolsReg)
 
-	// 8. Initialize MCP Manager (official go-sdk)
-	mcpMgr := mcp.NewManager(toolsReg)
+	// 8. Initialize Persistent MCP Manager (official go-sdk)
+	mcpMgr := mcp.NewManager(toolsReg, database)
+	if err := mcpMgr.LoadFromDB(ctx); err != nil {
+		log.Warn().Err(err).Msg("Failed to load MCP servers from database")
+	}
 
 	// 9. Initialize WebSocket Hub & LLM Orchestrator
 	hub := ws.NewHub(nil)

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"go-harness/pkg/db"
 	"go-harness/pkg/tools"
 	"go-harness/pkg/tracing"
 
@@ -29,9 +30,27 @@ type ServerConfig struct {
 	Args      []string          `json:"args,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`
 	URL       string            `json:"url,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"` // Custom HTTP headers for SSE/HTTP transport
 	Enabled   bool              `json:"enabled"`
 	Status    string            `json:"status"` // "connected", "disconnected", "error"
 	LastError string            `json:"last_error,omitempty"`
+}
+
+type headerRoundTripper struct {
+	headers map[string]string
+	rt      http.RoundTripper
+}
+
+func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := req.Clone(req.Context())
+	for k, v := range h.headers {
+		cloned.Header.Set(k, v)
+	}
+	rt := h.rt
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	return rt.RoundTrip(cloned)
 }
 
 type activeSession struct {
@@ -46,22 +65,63 @@ type Manager struct {
 	servers       map[string]*ServerConfig
 	sessions      map[string]*activeSession
 	toolsRegistry *tools.Registry
+	db            *db.DB
 }
 
 // NewManager creates a new MCP Manager instance.
-func NewManager(toolsReg *tools.Registry) *Manager {
+func NewManager(toolsReg *tools.Registry, database ...*db.DB) *Manager {
+	var d *db.DB
+	if len(database) > 0 {
+		d = database[0]
+	}
 	return &Manager{
 		servers:       make(map[string]*ServerConfig),
 		sessions:      make(map[string]*activeSession),
 		toolsRegistry: toolsReg,
+		db:            d,
 	}
+}
+
+// LoadFromDB loads all persistent MCP server configurations from SQLite and auto-connects enabled ones.
+func (m *Manager) LoadFromDB(ctx context.Context) error {
+	if m.db == nil {
+		return nil
+	}
+	records, err := m.db.GetMCPServers()
+	if err != nil {
+		return err
+	}
+
+	for _, rec := range records {
+		cfg := ServerConfig{
+			ID:        rec.ID,
+			Name:      rec.Name,
+			Transport: rec.Transport,
+			Command:   rec.Command,
+			Args:      rec.Args,
+			Env:       rec.Env,
+			URL:       rec.URL,
+			Headers:   rec.Headers,
+			Enabled:   rec.Enabled,
+			Status:    "disconnected",
+		}
+		m.mu.Lock()
+		m.servers[cfg.ID] = &cfg
+		m.mu.Unlock()
+
+		if cfg.Enabled {
+			go func(id string) {
+				_ = m.ConnectServer(ctx, id)
+			}(cfg.ID)
+		}
+	}
+	log.Info().Int("count", len(records)).Msg("Loaded persistent MCP servers from database")
+	return nil
 }
 
 // AddServer adds a server configuration.
 func (m *Manager) AddServer(cfg ServerConfig) (*ServerConfig, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if cfg.ID == "" {
 		cfg.ID = uuid.New().String()
 	}
@@ -71,6 +131,22 @@ func (m *Manager) AddServer(cfg ServerConfig) (*ServerConfig, error) {
 	cfg.Status = "disconnected"
 
 	m.servers[cfg.ID] = &cfg
+	m.mu.Unlock()
+
+	if m.db != nil {
+		_ = m.db.SaveMCPServer(db.MCPServerRecord{
+			ID:        cfg.ID,
+			Name:      cfg.Name,
+			Transport: cfg.Transport,
+			Command:   cfg.Command,
+			Args:      cfg.Args,
+			Env:       cfg.Env,
+			URL:       cfg.URL,
+			Headers:   cfg.Headers,
+			Enabled:   cfg.Enabled,
+		})
+	}
+
 	return &cfg, nil
 }
 
@@ -83,19 +159,34 @@ func (m *Manager) UpdateServer(cfg ServerConfig) error {
 		return fmt.Errorf("server not found: %s", cfg.ID)
 	}
 
+	wasConnected := existing.Status == "connected"
 	existing.Name = cfg.Name
 	existing.Transport = cfg.Transport
 	existing.Command = cfg.Command
 	existing.Args = cfg.Args
 	existing.Env = cfg.Env
 	existing.URL = cfg.URL
+	existing.Headers = cfg.Headers
 	existing.Enabled = cfg.Enabled
 	m.mu.Unlock()
 
-	if cfg.Enabled {
+	if m.db != nil {
+		_ = m.db.SaveMCPServer(db.MCPServerRecord{
+			ID:        cfg.ID,
+			Name:      cfg.Name,
+			Transport: cfg.Transport,
+			Command:   cfg.Command,
+			Args:      cfg.Args,
+			Env:       cfg.Env,
+			URL:       cfg.URL,
+			Headers:   cfg.Headers,
+			Enabled:   cfg.Enabled,
+		})
+	}
+
+	_ = m.DisconnectServer(cfg.ID)
+	if wasConnected || cfg.Enabled {
 		_ = m.ConnectServer(context.Background(), cfg.ID)
-	} else {
-		_ = m.DisconnectServer(cfg.ID)
 	}
 
 	return nil
@@ -106,8 +197,13 @@ func (m *Manager) DeleteServer(id string) error {
 	_ = m.DisconnectServer(id)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	delete(m.servers, id)
+	m.mu.Unlock()
+
+	if m.db != nil {
+		_ = m.db.DeleteMCPServer(id)
+	}
+
 	return nil
 }
 
@@ -133,7 +229,16 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 	}
 	m.mu.Unlock()
 
-	var transport mcp.Transport
+	mcpClient := mcp.NewClient(&mcp.Implementation{
+		Name:    "go-harness",
+		Version: "1.0.0",
+	}, nil)
+
+	initCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	var session *mcp.ClientSession
+	var err error
 	transportType := strings.ToLower(srv.Transport)
 
 	if transportType == "stdio" {
@@ -149,31 +254,44 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 			}
 		}
 
-		transport = &mcp.CommandTransport{Command: cmd}
-	} else if transportType == "sse" || transportType == "http" {
+		transport := &mcp.CommandTransport{Command: cmd}
+		session, err = mcpClient.Connect(initCtx, transport, nil)
+	} else if transportType == "sse" || transportType == "http" || transportType == "streamable" {
 		if srv.URL == "" {
-			return fmt.Errorf("url is required for sse transport")
+			return fmt.Errorf("url is required for http/sse transport")
 		}
 
-		transport = &mcp.SSEClientTransport{
-			Endpoint: srv.URL,
-			HTTPClient: &http.Client{
-				Timeout: 60 * time.Second,
-			},
+		httpClient := &http.Client{
+			Timeout: 60 * time.Second,
+		}
+		if len(srv.Headers) > 0 {
+			httpClient.Transport = &headerRoundTripper{
+				headers: srv.Headers,
+				rt:      http.DefaultTransport,
+			}
+		}
+
+		// First try StreamableClientTransport (MCP Streamable HTTP protocol)
+		streamableTransport := &mcp.StreamableClientTransport{
+			Endpoint:             srv.URL,
+			HTTPClient:           httpClient,
+			DisableStandaloneSSE: true,
+		}
+
+		session, err = mcpClient.Connect(initCtx, streamableTransport, nil)
+		if err != nil {
+			log.Debug().Err(err).Str("server", srv.Name).Msg("Streamable HTTP connect failed, trying SSE transport fallback")
+			// Fallback to legacy SSEClientTransport
+			sseTransport := &mcp.SSEClientTransport{
+				Endpoint:   srv.URL,
+				HTTPClient: httpClient,
+			}
+			session, err = mcpClient.Connect(initCtx, sseTransport, nil)
 		}
 	} else {
 		return fmt.Errorf("unsupported transport: %s", srv.Transport)
 	}
 
-	mcpClient := mcp.NewClient(&mcp.Implementation{
-		Name:    "go-harness",
-		Version: "1.0.0",
-	}, nil)
-
-	initCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	session, err := mcpClient.Connect(initCtx, transport, nil)
 	if err != nil {
 		m.setServerError(id, err)
 		return fmt.Errorf("failed to connect to official MCP server '%s': %w", srv.Name, err)
