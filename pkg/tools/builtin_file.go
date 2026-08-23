@@ -14,7 +14,7 @@ import (
 	"github.com/sashabaranov/go-openai/jsonschema"
 )
 
-// RegisterBuiltinTools registers the core file tools into the registry.
+// RegisterBuiltinTools registers the core file and script execution tools into the registry.
 func RegisterBuiltinTools(r *Registry, rootDir string) {
 	if rootDir == "" {
 		rootDir = "."
@@ -24,6 +24,7 @@ func RegisterBuiltinTools(r *Registry, rootDir string) {
 	r.Register(NewWriteFileTool(rootDir))
 	r.Register(NewUpdateFileTool(rootDir))
 	r.Register(NewListDirectoryTool(rootDir))
+	r.Register(NewExecuteScriptTool(rootDir))
 }
 
 // -------------------------------------------------------------

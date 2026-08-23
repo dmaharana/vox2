@@ -93,3 +93,65 @@ func TestBuiltinToolsCRUD(t *testing.T) {
 		}
 	}
 }
+
+func TestExecuteScriptTool(t *testing.T) {
+	reg := NewRegistry()
+	RegisterBuiltinTools(reg, ".")
+
+	ctx := context.Background()
+
+	// Test Python execution
+	pythonArgs, _ := json.Marshal(ExecuteScriptInput{
+		Language: "python",
+		Code:     "import sys\nprint('Hello from Python script')\n",
+	})
+	res, err := reg.Execute(ctx, "execute_script", pythonArgs)
+	if err != nil {
+		t.Logf("Python interpreter not available, skipping: %v", err)
+	} else {
+		out := res.(ExecuteScriptOutput)
+		if !strings.Contains(out.Stdout, "Hello from Python script") {
+			t.Errorf("unexpected python stdout: %s", out.Stdout)
+		}
+		if out.ExitCode != 0 {
+			t.Errorf("expected exit code 0, got %d", out.ExitCode)
+		}
+	}
+
+	// Test Bash execution
+	bashArgs, _ := json.Marshal(ExecuteScriptInput{
+		Language: "bash",
+		Code:     "echo 'Hello from Bash script'\n",
+	})
+	res, err = reg.Execute(ctx, "execute_script", bashArgs)
+	if err != nil {
+		t.Fatalf("bash execution failed: %v", err)
+	}
+	bashOut := res.(ExecuteScriptOutput)
+	if !strings.Contains(bashOut.Stdout, "Hello from Bash script") {
+		t.Errorf("unexpected bash stdout: %s", bashOut.Stdout)
+	}
+	if bashOut.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d", bashOut.ExitCode)
+	}
+
+	// Test unsupported language error
+	invalidArgs, _ := json.Marshal(ExecuteScriptInput{
+		Language: "unsupported_lang_xyz",
+		Code:     "echo test\n",
+	})
+	_, err = reg.Execute(ctx, "execute_script", invalidArgs)
+	if err == nil {
+		t.Errorf("expected error for unsupported language")
+	}
+
+	// Test empty code error
+	emptyCodeArgs, _ := json.Marshal(ExecuteScriptInput{
+		Language: "python",
+		Code:     "   \n",
+	})
+	_, err = reg.Execute(ctx, "execute_script", emptyCodeArgs)
+	if err == nil {
+		t.Errorf("expected error for empty code")
+	}
+}
