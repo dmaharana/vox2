@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ChatMessage, ToolCallState, SubflowState } from '../types'
@@ -10,14 +10,89 @@ import {
 } from './ui/accordion'
 import { Badge } from './ui/badge'
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card'
-import { User, Bot, Wrench, CheckCircle, AlertCircle, Loader2, GitFork, Brain } from 'lucide-react'
+import { Button } from './ui/button'
+import {
+  User,
+  Bot,
+  Wrench,
+  CheckCircle,
+  AlertCircle,
+  Loader2,
+  GitFork,
+  Brain,
+  ExternalLink,
+  FileCode,
+  Copy,
+  Check,
+} from 'lucide-react'
 
 interface Props {
   messages: ChatMessage[]
   streaming: boolean
 }
 
+const PreBlock: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [copied, setCopied] = useState(false)
+  const preRef = React.useRef<HTMLPreElement>(null)
+
+  const handleCopyCode = async () => {
+    if (preRef.current) {
+      const text = preRef.current.innerText || ''
+      try {
+        await navigator.clipboard.writeText(text)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      } catch (err) {
+        console.error('Failed to copy code', err)
+      }
+    }
+  }
+
+  return (
+    <div className="relative group/code my-3 not-prose">
+      <div className="absolute right-2 top-2 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-6 px-2 text-[10px] gap-1 bg-background/80 hover:bg-background border shadow-xs cursor-pointer"
+          onClick={handleCopyCode}
+          title="Copy code block"
+        >
+          {copied ? (
+            <>
+              <Check className="w-3 h-3 text-emerald-500" /> Copied
+            </>
+          ) : (
+            <>
+              <Copy className="w-3 h-3" /> Copy
+            </>
+          )}
+        </Button>
+      </div>
+      <pre
+        ref={preRef}
+        className="bg-muted/80 p-3.5 pt-4 rounded-xl border border-border/60 text-[12px] font-mono overflow-x-auto shadow-xs"
+      >
+        {children}
+      </pre>
+    </div>
+  )
+}
+
 export const ChatMessageList: React.FC<Props> = ({ messages, streaming }) => {
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  const handleCopy = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedId(id)
+      setTimeout(() => {
+        setCopiedId((curr) => (curr === id ? null : curr))
+      }, 2000)
+    } catch (err) {
+      console.error('Failed to copy to clipboard', err)
+    }
+  }
   return (
     <div className="space-y-6 pb-6">
       {messages.map((m) => (
@@ -64,7 +139,7 @@ export const ChatMessageList: React.FC<Props> = ({ messages, streaming }) => {
                       </Badge>
                     </CardHeader>
                     {sf.summary && (
-                      <CardContent className="p-3 pt-0 text-xs text-muted-foreground">
+                      <CardContent className="p-3 pt-0 text-xs font-mono text-muted-foreground">
                         {sf.summary}
                       </CardContent>
                     )}
@@ -140,17 +215,104 @@ export const ChatMessageList: React.FC<Props> = ({ messages, streaming }) => {
               <div
                 className={`p-3.5 rounded-2xl text-sm leading-relaxed ${
                   m.role === 'user'
-                    ? 'bg-primary text-primary-foreground rounded-tr-sm ml-auto'
+                    ? 'bg-primary text-primary-foreground rounded-tr-sm ml-auto shadow-xs'
                     : 'bg-card border border-border/80 rounded-tl-sm shadow-xs'
                 }`}
               >
                 {m.role === 'user' ? (
-                  <div className="whitespace-pre-wrap">{m.content}</div>
+                  <div className="group relative">
+                    <div className="whitespace-pre-wrap">{m.content}</div>
+                    <div className="flex justify-end pt-1 mt-1 border-t border-primary-foreground/15">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleCopy(m.id, m.content)}
+                        className="h-5 px-1.5 text-[10px] text-primary-foreground/75 hover:text-primary-foreground hover:bg-primary-foreground/10 gap-1 rounded cursor-pointer"
+                        title="Copy question"
+                      >
+                        {copiedId === m.id ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-300" /> Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" /> Copy
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
                 ) : (
-                  <div className="prose prose-sm dark:prose-invert max-w-none break-words">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {m.content}
-                    </ReactMarkdown>
+                  <div>
+                    <div className="prose prose-sm dark:prose-invert max-w-none break-words text-foreground">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        urlTransform={(url) => url}
+                        components={{
+                          a: ({ href, children, ...props }) => {
+                            const isFileLink = href?.startsWith('file://') || (href?.includes('.') && !href?.startsWith('http'))
+                            return (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary font-medium underline underline-offset-3 hover:text-primary/80 inline-flex items-center gap-1 transition-colors px-1 py-0.5 rounded bg-primary/10 hover:bg-primary/20 text-[13px] break-all not-prose"
+                                {...props}
+                              >
+                                {isFileLink ? (
+                                  <FileCode className="w-3.5 h-3.5 inline-block shrink-0 text-primary opacity-80" />
+                                ) : (
+                                  <ExternalLink className="w-3.5 h-3.5 inline-block shrink-0 text-primary opacity-80" />
+                                )}
+                                <span>{children}</span>
+                              </a>
+                            )
+                          },
+                          code: ({ className, children, ...props }) => {
+                            const isInline = !className && typeof children === 'string' && !children.includes('\n')
+                            if (isInline) {
+                              return (
+                                <code className="bg-muted px-1.5 py-0.5 rounded text-[12px] font-mono font-medium text-foreground border border-border/40" {...props}>
+                                  {children}
+                                </code>
+                              )
+                            }
+                            return (
+                              <code className={className} {...props}>
+                                {children}
+                              </code>
+                            )
+                          },
+                          pre: ({ children }) => <PreBlock>{children}</PreBlock>,
+                        }}
+                      >
+                        {m.content}
+                      </ReactMarkdown>
+                    </div>
+
+                    {/* Assistant Response Actions Toolbar */}
+                    <div className="flex items-center justify-between pt-2.5 mt-2.5 border-t border-border/40 text-[11px] text-muted-foreground select-none">
+                      <span className="text-[10px] opacity-60 font-mono">
+                        {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleCopy(m.id, m.content)}
+                        className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent/60 gap-1.5 rounded-md cursor-pointer"
+                        title="Copy entire response"
+                      >
+                        {copiedId === m.id ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-500" /> Copied Response
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" /> Copy Response
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
