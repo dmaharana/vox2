@@ -31,11 +31,16 @@ type Config struct {
 	OTelEndpoint string `json:"otel_endpoint"`
 
 	// LLM
-	LLMBaseURL     string  `json:"llm_base_url"`
-	LLMModel       string  `json:"llm_model"`
-	LLMAPIKey      string  `json:"llm_api_key"`
-	LLMTemperature float64 `json:"llm_temperature"`
-	LLMMaxTokens   int     `json:"llm_max_tokens"`
+	LLMBaseURL          string  `json:"llm_base_url"`
+	LLMModel            string  `json:"llm_model"`
+	LLMAPIKey           string  `json:"llm_api_key"`
+	LLMAuthType         string  `json:"llm_auth_type"` // "api_key" or "oauth2"
+	LLMOAuthClientID     string  `json:"llm_oauth_client_id"`
+	LLMOAuthClientSecret string  `json:"llm_oauth_client_secret"`
+	LLMOAuthTokenURL     string  `json:"llm_oauth_token_url"`
+	LLMOAuthScopes       string  `json:"llm_oauth_scopes"`
+	LLMTemperature      float64 `json:"llm_temperature"`
+	LLMMaxTokens        int     `json:"llm_max_tokens"`
 }
 
 // Load loads configuration from optional .env file and environment variables with sensible defaults.
@@ -47,20 +52,25 @@ func Load(envPath ...string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Port:           getEnvInt("PORT", 8080),
-		Host:           getEnv("HOST", "0.0.0.0"),
-		LogLevel:       getEnv("LOG_LEVEL", "info"),
-		LogFormat:      getEnv("LOG_FORMAT", "console"),
-		SkillsDir:      getEnv("SKILLS_DIR", "./skills"),
-		DBPath:         getEnv("DB_PATH", "./data/harness.db"),
-		TraceFile:      getEnv("TRACE_FILE", "./logs/traces.json"),
-		OTelExporter:   getEnv("OTEL_EXPORTER", "console"),
-		OTelEndpoint:   getEnv("OTEL_ENDPOINT", "localhost:4317"),
-		LLMBaseURL:     getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
-		LLMModel:       getEnv("LLM_MODEL", "gpt-4o"),
-		LLMAPIKey:      getEnv("LLM_API_KEY", ""),
-		LLMTemperature: getEnvFloat("LLM_TEMPERATURE", 0.7),
-		LLMMaxTokens:   getEnvInt("LLM_MAX_TOKENS", 4096),
+		Port:                 getEnvInt("PORT", 8080),
+		Host:                 getEnv("HOST", "0.0.0.0"),
+		LogLevel:             getEnv("LOG_LEVEL", "info"),
+		LogFormat:            getEnv("LOG_FORMAT", "console"),
+		SkillsDir:            getEnv("SKILLS_DIR", "./skills"),
+		DBPath:               getEnv("DB_PATH", "./data/harness.db"),
+		TraceFile:            getEnv("TRACE_FILE", "./logs/traces.json"),
+		OTelExporter:         getEnv("OTEL_EXPORTER", "console"),
+		OTelEndpoint:         getEnv("OTEL_ENDPOINT", "localhost:4317"),
+		LLMBaseURL:           getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
+		LLMModel:             getEnv("LLM_MODEL", "gpt-4o"),
+		LLMAPIKey:            getEnv("LLM_API_KEY", ""),
+		LLMAuthType:          getEnv("LLM_AUTH_TYPE", "api_key"),
+		LLMOAuthClientID:     getEnv("LLM_OAUTH_CLIENT_ID", ""),
+		LLMOAuthClientSecret: getEnv("LLM_OAUTH_CLIENT_SECRET", ""),
+		LLMOAuthTokenURL:     getEnv("LLM_OAUTH_TOKEN_URL", ""),
+		LLMOAuthScopes:       getEnv("LLM_OAUTH_SCOPES", ""),
+		LLMTemperature:       getEnvFloat("LLM_TEMPERATURE", 0.7),
+		LLMMaxTokens:         getEnvInt("LLM_MAX_TOKENS", 4096),
 	}
 
 	// Ensure directories for db and traces exist
@@ -79,20 +89,25 @@ func (c *Config) Clone() Config {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return Config{
-		Port:           c.Port,
-		Host:           c.Host,
-		LogLevel:       c.LogLevel,
-		LogFormat:      c.LogFormat,
-		SkillsDir:      c.SkillsDir,
-		DBPath:         c.DBPath,
-		TraceFile:      c.TraceFile,
-		OTelExporter:   c.OTelExporter,
-		OTelEndpoint:   c.OTelEndpoint,
-		LLMBaseURL:     c.LLMBaseURL,
-		LLMModel:       c.LLMModel,
-		LLMAPIKey:      c.LLMAPIKey,
-		LLMTemperature: c.LLMTemperature,
-		LLMMaxTokens:   c.LLMMaxTokens,
+		Port:                 c.Port,
+		Host:                 c.Host,
+		LogLevel:             c.LogLevel,
+		LogFormat:            c.LogFormat,
+		SkillsDir:            c.SkillsDir,
+		DBPath:               c.DBPath,
+		TraceFile:            c.TraceFile,
+		OTelExporter:         c.OTelExporter,
+		OTelEndpoint:         c.OTelEndpoint,
+		LLMBaseURL:           c.LLMBaseURL,
+		LLMModel:             c.LLMModel,
+		LLMAPIKey:            c.LLMAPIKey,
+		LLMAuthType:          c.LLMAuthType,
+		LLMOAuthClientID:     c.LLMOAuthClientID,
+		LLMOAuthClientSecret: c.LLMOAuthClientSecret,
+		LLMOAuthTokenURL:     c.LLMOAuthTokenURL,
+		LLMOAuthScopes:       c.LLMOAuthScopes,
+		LLMTemperature:       c.LLMTemperature,
+		LLMMaxTokens:         c.LLMMaxTokens,
 	}
 }
 
@@ -115,6 +130,21 @@ func (c *Config) Update(newCfg Config) {
 	}
 	if newCfg.LLMAPIKey != "" {
 		c.LLMAPIKey = newCfg.LLMAPIKey
+	}
+	if newCfg.LLMAuthType != "" {
+		c.LLMAuthType = newCfg.LLMAuthType
+	}
+	if newCfg.LLMOAuthClientID != "" {
+		c.LLMOAuthClientID = newCfg.LLMOAuthClientID
+	}
+	if newCfg.LLMOAuthClientSecret != "" {
+		c.LLMOAuthClientSecret = newCfg.LLMOAuthClientSecret
+	}
+	if newCfg.LLMOAuthTokenURL != "" {
+		c.LLMOAuthTokenURL = newCfg.LLMOAuthTokenURL
+	}
+	if newCfg.LLMOAuthScopes != "" {
+		c.LLMOAuthScopes = newCfg.LLMOAuthScopes
 	}
 	if newCfg.LLMTemperature >= 0 {
 		c.LLMTemperature = newCfg.LLMTemperature

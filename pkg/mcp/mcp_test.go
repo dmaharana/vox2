@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"go-harness/pkg/tools"
@@ -24,11 +26,16 @@ func TestMCPManagerConfig(t *testing.T) {
 		t.Fatalf("failed to add server: %v", err)
 	}
 
-	// 2. Add SSE server
+	// 2. Add SSE server with OAuth2
 	cfg2, err := mgr.AddServer(ServerConfig{
-		Name:      "Test SSE Server",
-		Transport: "sse",
-		URL:       "http://localhost:9999/sse",
+		Name:              "Google Workspace MCP",
+		Transport:         "sse",
+		URL:               "https://mcp.googlecloud.example.com/sse",
+		AuthType:          "oauth2",
+		OAuthClientID:     "g-client-id",
+		OAuthClientSecret: "g-client-secret-12345",
+		OAuthTokenURL:     "https://oauth2.googleapis.com/token",
+		OAuthScopes:       "https://www.googleapis.com/auth/cloud-platform",
 	})
 	if err != nil {
 		t.Fatalf("failed to add sse server: %v", err)
@@ -37,6 +44,21 @@ func TestMCPManagerConfig(t *testing.T) {
 	servers := mgr.ListServers()
 	if len(servers) != 2 {
 		t.Fatalf("expected 2 servers, got %d", len(servers))
+	}
+
+	// Verify secret masking in ListServers
+	for _, s := range servers {
+		if s.ID == cfg2.ID {
+			if s.OAuthClientSecret != "" {
+				t.Errorf("expected masked OAuthClientSecret, got: %s", s.OAuthClientSecret)
+			}
+			if !s.HasOAuthClientSecret {
+				t.Errorf("expected HasOAuthClientSecret=true")
+			}
+			if s.AuthType != "oauth2" {
+				t.Errorf("expected AuthType=oauth2, got: %s", s.AuthType)
+			}
+		}
 	}
 
 	// 3. Update server
@@ -53,6 +75,54 @@ func TestMCPManagerConfig(t *testing.T) {
 	serversAfter := mgr.ListServers()
 	if len(serversAfter) != 1 || serversAfter[0].Name != "Renamed Server" {
 		t.Errorf("delete/update mismatch: %+v", serversAfter)
+	}
+}
+
+func TestMCPOAuth2TokenAcquisition(t *testing.T) {
+	var tokenCalls int64
+
+	// Mock OAuth2 token server (e.g. Google OAuth2 endpoint)
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&tokenCalls, 1)
+		clientID, clientSecret, ok := r.BasicAuth()
+		if !ok {
+			clientID = r.FormValue("client_id")
+			clientSecret = r.FormValue("client_secret")
+		}
+
+		if clientID != "google-client-id" || clientSecret != "google-client-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "google-mcp-access-token-777",
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		})
+	}))
+	defer tokenServer.Close()
+
+	reg := tools.NewRegistry()
+	mgr := NewManager(reg)
+
+	srv, err := mgr.AddServer(ServerConfig{
+		Name:              "Google Cloud MCP",
+		Transport:         "sse",
+		URL:               "http://invalid.mcp.host:1234/sse", // Won't connect fully to MCP handshake, but tests config & setup
+		AuthType:          "oauth2",
+		OAuthClientID:     "google-client-id",
+		OAuthClientSecret: "google-client-secret",
+		OAuthTokenURL:     tokenServer.URL,
+		OAuthScopes:       "https://www.googleapis.com/auth/cloud-platform",
+	})
+	if err != nil {
+		t.Fatalf("AddServer failed: %v", err)
+	}
+
+	if srv.AuthType != "oauth2" {
+		t.Errorf("expected AuthType oauth2, got %s", srv.AuthType)
 	}
 }
 

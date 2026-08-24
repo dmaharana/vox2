@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"go-harness/pkg/skills"
 	"go-harness/pkg/tools"
 	"go-harness/pkg/ws"
+
+	"github.com/sashabaranov/go-openai"
 )
 
 func TestLLMOrchestratorMock(t *testing.T) {
@@ -99,6 +102,81 @@ func TestLLMOrchestratorMock(t *testing.T) {
 	}
 }
 
+func TestLLMOAuth2Client(t *testing.T) {
+	var tokenCalls int64
+	var llmCalls int64
+	var receivedAuthHeader string
+
+	// 1. Mock OAuth2 Token Server
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&tokenCalls, 1)
+		clientID, clientSecret, ok := r.BasicAuth()
+		if !ok {
+			clientID = r.FormValue("client_id")
+			clientSecret = r.FormValue("client_secret")
+		}
+
+		if clientID != "test-client-id" || clientSecret != "test-client-secret" {
+			http.Error(w, "invalid client credentials", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "oauth2-generated-access-token-999",
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		})
+	}))
+	defer tokenServer.Close()
+
+	// 2. Mock LLM Server checking Bearer token
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&llmCalls, 1)
+		receivedAuthHeader = r.Header.Get("Authorization")
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunk := `data: {"id":"chatcmpl-oauth","choices":[{"index":0,"delta":{"content":"OAuth2 works!"},"finish_reason":"stop"}]}`
+		fmt.Fprintf(w, "%s\n\n", chunk)
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+	}))
+	defer llmServer.Close()
+
+	cfg := &config.Config{
+		LLMBaseURL:           llmServer.URL + "/v1",
+		LLMModel:             "gpt-4o",
+		LLMAuthType:          "oauth2",
+		LLMOAuthClientID:     "test-client-id",
+		LLMOAuthClientSecret: "test-client-secret",
+		LLMOAuthTokenURL:     tokenServer.URL,
+		LLMOAuthScopes:       "https://www.googleapis.com/auth/cloud-platform",
+	}
+
+	client := NewClient(cfg)
+	stream, err := client.StreamChat(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("StreamChat with OAuth2 failed: %v", err)
+	}
+	defer stream.Close()
+
+	delta, err := ReadStreamChunk(stream, make(map[int]*openai.ToolCall))
+	if err != nil {
+		t.Fatalf("ReadStreamChunk failed: %v", err)
+	}
+
+	if delta.Content != "OAuth2 works!" {
+		t.Errorf("expected 'OAuth2 works!', got '%s'", delta.Content)
+	}
+
+	if tokenCalls == 0 {
+		t.Errorf("expected OAuth2 token endpoint to be called")
+	}
+
+	if receivedAuthHeader != "Bearer oauth2-generated-access-token-999" {
+		t.Errorf("expected Authorization 'Bearer oauth2-generated-access-token-999', got '%s'", receivedAuthHeader)
+	}
+}
+
 func TestReadStreamChunk(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -120,8 +198,14 @@ func TestReadStreamChunk(t *testing.T) {
 	}
 	defer stream.Close()
 
-	toolCallMap := make(map[int]*json.RawMessage)
-	_ = toolCallMap
+	toolCallMap := make(map[int]*openai.ToolCall)
+	delta, err := ReadStreamChunk(stream, toolCallMap)
+	if err != nil {
+		t.Fatalf("ReadStreamChunk failed: %v", err)
+	}
+	if delta.Content != "Test token" {
+		t.Errorf("expected 'Test token', got '%s'", delta.Content)
+	}
 }
 
 func TestSlashCommands(t *testing.T) {

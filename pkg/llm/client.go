@@ -4,24 +4,34 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"go-harness/pkg/config"
 	"go-harness/pkg/tracing"
 
 	"github.com/sashabaranov/go-openai"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
-// Client wraps sashabaranov/go-openai client with configuration and tracing.
+// Client wraps sashabaranov/go-openai client with configuration, OAuth2 auto-refresh, and tracing.
 type Client struct {
-	cfg        *config.Config
-	openAI     *openai.Client
-	baseURL    string
-	model      string
-	apiKey     string
-	temperature float64
-	maxTokens  int
+	mu                sync.RWMutex
+	cfg               *config.Config
+	openAI            *openai.Client
+	baseURL           string
+	model             string
+	apiKey            string
+	authType          string
+	oauthClientID     string
+	oauthClientSecret string
+	oauthTokenURL     string
+	oauthScopes       string
+	temperature       float64
+	maxTokens         int
 }
 
 // NewClient creates a new OpenAI-compatible LLM client.
@@ -35,9 +45,18 @@ func NewClient(cfg *config.Config) *Client {
 
 func (c *Client) refresh() {
 	snap := c.cfg.Clone()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.baseURL = snap.LLMBaseURL
 	c.model = snap.LLMModel
 	c.apiKey = snap.LLMAPIKey
+	c.authType = snap.LLMAuthType
+	c.oauthClientID = snap.LLMOAuthClientID
+	c.oauthClientSecret = snap.LLMOAuthClientSecret
+	c.oauthTokenURL = snap.LLMOAuthTokenURL
+	c.oauthScopes = snap.LLMOAuthScopes
 	c.temperature = snap.LLMTemperature
 	c.maxTokens = snap.LLMMaxTokens
 
@@ -48,11 +67,51 @@ func (c *Client) refresh() {
 		c.model = "gpt-4o"
 	}
 
-	clientCfg := openai.DefaultConfig(c.apiKey)
+	apiKey := c.apiKey
+	if apiKey == "" && (c.authType == "oauth2" || (c.oauthClientID != "" && c.oauthClientSecret != "")) {
+		// Placeholder for go-openai validator when OAuth2 client handles the token header
+		apiKey = "oauth2-token"
+	}
+
+	clientCfg := openai.DefaultConfig(apiKey)
 	if c.baseURL != "" {
 		clientCfg.BaseURL = strings.TrimRight(c.baseURL, "/")
-		if !strings.HasSuffix(clientCfg.BaseURL, "/v1") && !strings.Contains(clientCfg.BaseURL, "openai.com") {
-			// Some local endpoints (like Ollama or vLLM) support direct base URLs
+	}
+
+	// Configure OAuth2 if auth_type is oauth2 or client credentials are provided
+	if c.authType == "oauth2" || (c.oauthClientID != "" && c.oauthClientSecret != "") {
+		tokenURL := c.oauthTokenURL
+		if tokenURL == "" {
+			tokenURL = "https://oauth2.googleapis.com/token"
+		}
+
+		var scopes []string
+		if c.oauthScopes != "" {
+			for _, s := range strings.FieldsFunc(c.oauthScopes, func(r rune) bool {
+				return r == ' ' || r == ',' || r == ';'
+			}) {
+				if trimmed := strings.TrimSpace(s); trimmed != "" {
+					scopes = append(scopes, trimmed)
+				}
+			}
+		}
+
+		ccConfig := &clientcredentials.Config{
+			ClientID:     c.oauthClientID,
+			ClientSecret: c.oauthClientSecret,
+			TokenURL:     tokenURL,
+			Scopes:       scopes,
+		}
+
+		// TokenSource handles token caching and automatic renewal before expiry
+		ctx := context.Background()
+		ts := ccConfig.TokenSource(ctx)
+		clientCfg.HTTPClient = &http.Client{
+			Transport: &oauth2.Transport{
+				Source: ts,
+				Base:   http.DefaultTransport,
+			},
+			Timeout: 120 * time.Second,
 		}
 	}
 
@@ -63,11 +122,18 @@ func (c *Client) refresh() {
 func (c *Client) StreamChat(ctx context.Context, messages []openai.ChatCompletionMessage, tools []openai.Tool) (*openai.ChatCompletionStream, error) {
 	c.refresh()
 
+	c.mu.RLock()
+	model := c.model
+	temp := c.temperature
+	maxTokens := c.maxTokens
+	cli := c.openAI
+	c.mu.RUnlock()
+
 	req := openai.ChatCompletionRequest{
-		Model:       c.model,
+		Model:       model,
 		Messages:    messages,
-		Temperature: float32(c.temperature),
-		MaxTokens:   c.maxTokens,
+		Temperature: float32(temp),
+		MaxTokens:   maxTokens,
 		Stream:      true,
 	}
 
@@ -77,16 +143,16 @@ func (c *Client) StreamChat(ctx context.Context, messages []openai.ChatCompletio
 	}
 
 	startTime := time.Now()
-	stream, err := c.openAI.CreateChatCompletionStream(ctx, req)
+	stream, err := cli.CreateChatCompletionStream(ctx, req)
 	if err != nil {
-		tracing.TraceLLMCall(ctx, c.model, "stream_init_error", time.Since(startTime), 0, 0, err)
+		tracing.TraceLLMCall(ctx, model, "stream_init_error", time.Since(startTime), 0, 0, err)
 		return nil, err
 	}
 
 	return stream, nil
 }
 
-// CompletionStreamChunk represents assembled chunk deltas and tool call parts.
+// StreamDelta represents assembled chunk deltas and tool call parts.
 type StreamDelta struct {
 	Content   string
 	ToolCalls []openai.ToolCall

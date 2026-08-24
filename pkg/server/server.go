@@ -112,6 +112,7 @@ func (s *Server) setupRoutes() {
 		r.Get("/tools", s.handleListTools)
 		r.Post("/tools/{name}/toggle", s.handleToggleTool)
 		r.Get("/skills", s.handleListSkills)
+		r.Post("/skills/refresh", s.handleRefreshSkills)
 		r.Post("/skills/{name}/toggle", s.handleToggleSkill)
 
 		// MCP Servers
@@ -151,31 +152,41 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // SettingsResponse returns sanitized settings to the frontend.
 type SettingsResponse struct {
-	LLMBaseURL     string  `json:"llm_base_url"`
-	LLMModel       string  `json:"llm_model"`
-	HasAPIKey      bool    `json:"has_api_key"`
-	LLMTemperature float64 `json:"llm_temperature"`
-	LLMMaxTokens   int     `json:"llm_max_tokens"`
-	LogLevel       string  `json:"log_level"`
-	LogFormat      string  `json:"log_format"`
-	SkillsDir      string  `json:"skills_dir"`
-	OTelExporter   string  `json:"otel_exporter"`
-	OTelEndpoint   string  `json:"otel_endpoint"`
+	LLMBaseURL           string  `json:"llm_base_url"`
+	LLMModel             string  `json:"llm_model"`
+	HasAPIKey            bool    `json:"has_api_key"`
+	LLMAuthType          string  `json:"llm_auth_type"`
+	LLMOAuthClientID     string  `json:"llm_oauth_client_id"`
+	HasOAuthClientSecret bool    `json:"has_oauth_client_secret"`
+	LLMOAuthTokenURL     string  `json:"llm_oauth_token_url"`
+	LLMOAuthScopes       string  `json:"llm_oauth_scopes"`
+	LLMTemperature       float64 `json:"llm_temperature"`
+	LLMMaxTokens         int     `json:"llm_max_tokens"`
+	LogLevel             string  `json:"log_level"`
+	LogFormat            string  `json:"log_format"`
+	SkillsDir            string  `json:"skills_dir"`
+	OTelExporter         string  `json:"otel_exporter"`
+	OTelEndpoint         string  `json:"otel_endpoint"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	current := s.cfg.Clone()
 	resp := SettingsResponse{
-		LLMBaseURL:     current.LLMBaseURL,
-		LLMModel:       current.LLMModel,
-		HasAPIKey:      current.LLMAPIKey != "",
-		LLMTemperature: current.LLMTemperature,
-		LLMMaxTokens:   current.LLMMaxTokens,
-		LogLevel:       current.LogLevel,
-		LogFormat:      current.LogFormat,
-		SkillsDir:      current.SkillsDir,
-		OTelExporter:   current.OTelExporter,
-		OTelEndpoint:   current.OTelEndpoint,
+		LLMBaseURL:           current.LLMBaseURL,
+		LLMModel:             current.LLMModel,
+		HasAPIKey:            current.LLMAPIKey != "",
+		LLMAuthType:          current.LLMAuthType,
+		LLMOAuthClientID:     current.LLMOAuthClientID,
+		HasOAuthClientSecret: current.LLMOAuthClientSecret != "",
+		LLMOAuthTokenURL:     current.LLMOAuthTokenURL,
+		LLMOAuthScopes:       current.LLMOAuthScopes,
+		LLMTemperature:       current.LLMTemperature,
+		LLMMaxTokens:         current.LLMMaxTokens,
+		LogLevel:             current.LogLevel,
+		LogFormat:            current.LogFormat,
+		SkillsDir:            current.SkillsDir,
+		OTelExporter:         current.OTelExporter,
+		OTelEndpoint:         current.OTelEndpoint,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -183,13 +194,18 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateSettingsRequest struct {
-	LLMBaseURL     *string  `json:"llm_base_url,omitempty"`
-	LLMModel       *string  `json:"llm_model,omitempty"`
-	LLMAPIKey      *string  `json:"llm_api_key,omitempty"`
-	LLMTemperature *float64 `json:"llm_temperature,omitempty"`
-	LLMMaxTokens   *int     `json:"llm_max_tokens,omitempty"`
-	LogLevel       *string  `json:"log_level,omitempty"`
-	SkillsDir      *string  `json:"skills_dir,omitempty"`
+	LLMBaseURL           *string  `json:"llm_base_url,omitempty"`
+	LLMModel             *string  `json:"llm_model,omitempty"`
+	LLMAPIKey            *string  `json:"llm_api_key,omitempty"`
+	LLMAuthType          *string  `json:"llm_auth_type,omitempty"`
+	LLMOAuthClientID     *string  `json:"llm_oauth_client_id,omitempty"`
+	LLMOAuthClientSecret *string  `json:"llm_oauth_client_secret,omitempty"`
+	LLMOAuthTokenURL     *string  `json:"llm_oauth_token_url,omitempty"`
+	LLMOAuthScopes       *string  `json:"llm_oauth_scopes,omitempty"`
+	LLMTemperature       *float64 `json:"llm_temperature,omitempty"`
+	LLMMaxTokens         *int     `json:"llm_max_tokens,omitempty"`
+	LogLevel             *string  `json:"log_level,omitempty"`
+	SkillsDir            *string  `json:"skills_dir,omitempty"`
 }
 
 func (s *Server) handlePostSettings(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +224,21 @@ func (s *Server) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.LLMAPIKey != nil {
 		current.LLMAPIKey = *req.LLMAPIKey
+	}
+	if req.LLMAuthType != nil {
+		current.LLMAuthType = *req.LLMAuthType
+	}
+	if req.LLMOAuthClientID != nil {
+		current.LLMOAuthClientID = *req.LLMOAuthClientID
+	}
+	if req.LLMOAuthClientSecret != nil {
+		current.LLMOAuthClientSecret = *req.LLMOAuthClientSecret
+	}
+	if req.LLMOAuthTokenURL != nil {
+		current.LLMOAuthTokenURL = *req.LLMOAuthTokenURL
+	}
+	if req.LLMOAuthScopes != nil {
+		current.LLMOAuthScopes = *req.LLMOAuthScopes
 	}
 	if req.LLMTemperature != nil {
 		current.LLMTemperature = *req.LLMTemperature
@@ -419,6 +450,19 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	if s.skillsLoader == nil {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]skills.Skill{})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.skillsLoader.List())
+}
+
+func (s *Server) handleRefreshSkills(w http.ResponseWriter, r *http.Request) {
+	if s.skillsLoader == nil {
+		http.Error(w, "Skills loader not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.skillsLoader.Reload(); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to refresh skills from disk: %v", err), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

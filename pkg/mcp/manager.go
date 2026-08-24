@@ -19,21 +19,31 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rs/zerolog/log"
 	"github.com/sashabaranov/go-openai/jsonschema"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 // ServerConfig defines the connection parameters for an MCP server.
 type ServerConfig struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Transport string            `json:"transport"` // "stdio" or "sse" / "http"
-	Command   string            `json:"command,omitempty"`
-	Args      []string          `json:"args,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	URL       string            `json:"url,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"` // Custom HTTP headers for SSE/HTTP transport
-	Enabled   bool              `json:"enabled"`
-	Status    string            `json:"status"` // "connected", "disconnected", "error"
-	LastError string            `json:"last_error,omitempty"`
+	ID                   string            `json:"id"`
+	Name                 string            `json:"name"`
+	Transport            string            `json:"transport"` // "stdio" or "sse" / "http"
+	Command              string            `json:"command,omitempty"`
+	Args                 []string          `json:"args,omitempty"`
+	Env                  map[string]string `json:"env,omitempty"`
+	URL                  string            `json:"url,omitempty"`
+	Headers              map[string]string `json:"headers,omitempty"` // Custom HTTP headers for SSE/HTTP transport
+	AuthType             string            `json:"auth_type,omitempty"` // "none", "headers", "oauth2"
+	OAuthClientID        string            `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret    string            `json:"oauth_client_secret,omitempty"`
+	HasOAuthClientSecret bool              `json:"has_oauth_client_secret,omitempty"`
+	OAuthTokenURL        string            `json:"oauth_token_url,omitempty"`
+	OAuthScopes          string            `json:"oauth_scopes,omitempty"`
+	OAuthAccessToken     string            `json:"oauth_access_token,omitempty"`
+	HasOAuthAccessToken  bool              `json:"has_oauth_access_token,omitempty"`
+	Enabled              bool              `json:"enabled"`
+	Status               string            `json:"status"` // "connected", "disconnected", "error"
+	LastError            string            `json:"last_error,omitempty"`
 }
 
 type headerRoundTripper struct {
@@ -94,16 +104,22 @@ func (m *Manager) LoadFromDB(ctx context.Context) error {
 
 	for _, rec := range records {
 		cfg := ServerConfig{
-			ID:        rec.ID,
-			Name:      rec.Name,
-			Transport: rec.Transport,
-			Command:   rec.Command,
-			Args:      rec.Args,
-			Env:       rec.Env,
-			URL:       rec.URL,
-			Headers:   rec.Headers,
-			Enabled:   rec.Enabled,
-			Status:    "disconnected",
+			ID:                rec.ID,
+			Name:              rec.Name,
+			Transport:         rec.Transport,
+			Command:           rec.Command,
+			Args:              rec.Args,
+			Env:               rec.Env,
+			URL:               rec.URL,
+			Headers:           rec.Headers,
+			AuthType:          rec.AuthType,
+			OAuthClientID:     rec.OAuthClientID,
+			OAuthClientSecret: rec.OAuthClientSecret,
+			OAuthTokenURL:     rec.OAuthTokenURL,
+			OAuthScopes:       rec.OAuthScopes,
+			OAuthAccessToken:  rec.OAuthAccessToken,
+			Enabled:           rec.Enabled,
+			Status:            "disconnected",
 		}
 		m.mu.Lock()
 		m.servers[cfg.ID] = &cfg
@@ -135,15 +151,21 @@ func (m *Manager) AddServer(cfg ServerConfig) (*ServerConfig, error) {
 
 	if m.db != nil {
 		_ = m.db.SaveMCPServer(db.MCPServerRecord{
-			ID:        cfg.ID,
-			Name:      cfg.Name,
-			Transport: cfg.Transport,
-			Command:   cfg.Command,
-			Args:      cfg.Args,
-			Env:       cfg.Env,
-			URL:       cfg.URL,
-			Headers:   cfg.Headers,
-			Enabled:   cfg.Enabled,
+			ID:                cfg.ID,
+			Name:              cfg.Name,
+			Transport:         cfg.Transport,
+			Command:           cfg.Command,
+			Args:              cfg.Args,
+			Env:               cfg.Env,
+			URL:               cfg.URL,
+			Headers:           cfg.Headers,
+			AuthType:          cfg.AuthType,
+			OAuthClientID:     cfg.OAuthClientID,
+			OAuthClientSecret: cfg.OAuthClientSecret,
+			OAuthTokenURL:     cfg.OAuthTokenURL,
+			OAuthScopes:       cfg.OAuthScopes,
+			OAuthAccessToken:  cfg.OAuthAccessToken,
+			Enabled:           cfg.Enabled,
 		})
 	}
 
@@ -167,20 +189,36 @@ func (m *Manager) UpdateServer(cfg ServerConfig) error {
 	existing.Env = cfg.Env
 	existing.URL = cfg.URL
 	existing.Headers = cfg.Headers
+	existing.AuthType = cfg.AuthType
+	existing.OAuthClientID = cfg.OAuthClientID
+	if cfg.OAuthClientSecret != "" {
+		existing.OAuthClientSecret = cfg.OAuthClientSecret
+	}
+	existing.OAuthTokenURL = cfg.OAuthTokenURL
+	existing.OAuthScopes = cfg.OAuthScopes
+	if cfg.OAuthAccessToken != "" {
+		existing.OAuthAccessToken = cfg.OAuthAccessToken
+	}
 	existing.Enabled = cfg.Enabled
 	m.mu.Unlock()
 
 	if m.db != nil {
 		_ = m.db.SaveMCPServer(db.MCPServerRecord{
-			ID:        cfg.ID,
-			Name:      cfg.Name,
-			Transport: cfg.Transport,
-			Command:   cfg.Command,
-			Args:      cfg.Args,
-			Env:       cfg.Env,
-			URL:       cfg.URL,
-			Headers:   cfg.Headers,
-			Enabled:   cfg.Enabled,
+			ID:                existing.ID,
+			Name:              existing.Name,
+			Transport:         existing.Transport,
+			Command:           existing.Command,
+			Args:              existing.Args,
+			Env:               existing.Env,
+			URL:               existing.URL,
+			Headers:           existing.Headers,
+			AuthType:          existing.AuthType,
+			OAuthClientID:     existing.OAuthClientID,
+			OAuthClientSecret: existing.OAuthClientSecret,
+			OAuthTokenURL:     existing.OAuthTokenURL,
+			OAuthScopes:       existing.OAuthScopes,
+			OAuthAccessToken:  existing.OAuthAccessToken,
+			Enabled:           existing.Enabled,
 		})
 	}
 
@@ -207,14 +245,19 @@ func (m *Manager) DeleteServer(id string) error {
 	return nil
 }
 
-// ListServers returns a copy of all configured MCP servers.
+// ListServers returns a copy of all configured MCP servers with secrets masked.
 func (m *Manager) ListServers() []ServerConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make([]ServerConfig, 0, len(m.servers))
 	for _, s := range m.servers {
-		result = append(result, *s)
+		safeCopy := *s
+		safeCopy.HasOAuthClientSecret = s.OAuthClientSecret != ""
+		safeCopy.HasOAuthAccessToken = s.OAuthAccessToken != ""
+		safeCopy.OAuthClientSecret = "" // mask
+		safeCopy.OAuthAccessToken = ""  // mask
+		result = append(result, safeCopy)
 	}
 	return result
 }
@@ -261,14 +304,58 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 			return fmt.Errorf("url is required for http/sse transport")
 		}
 
-		httpClient := &http.Client{
-			Timeout: 60 * time.Second,
-		}
-		if len(srv.Headers) > 0 {
-			httpClient.Transport = &headerRoundTripper{
-				headers: srv.Headers,
-				rt:      http.DefaultTransport,
+		var baseTransport http.RoundTripper = http.DefaultTransport
+
+		// OAuth2 authentication support (e.g. Google OAuth2, client credentials, or access tokens)
+		if srv.AuthType == "oauth2" || srv.AuthType == "oauth2_google" || (srv.OAuthClientID != "" && srv.OAuthClientSecret != "") || srv.OAuthAccessToken != "" {
+			if srv.OAuthClientID != "" && srv.OAuthClientSecret != "" {
+				tokenURL := srv.OAuthTokenURL
+				if tokenURL == "" {
+					tokenURL = "https://oauth2.googleapis.com/token"
+				}
+				var scopes []string
+				if srv.OAuthScopes != "" {
+					for _, s := range strings.FieldsFunc(srv.OAuthScopes, func(r rune) bool {
+						return r == ' ' || r == ',' || r == ';'
+					}) {
+						if t := strings.TrimSpace(s); t != "" {
+							scopes = append(scopes, t)
+						}
+					}
+				}
+				ccConfig := &clientcredentials.Config{
+					ClientID:     srv.OAuthClientID,
+					ClientSecret: srv.OAuthClientSecret,
+					TokenURL:     tokenURL,
+					Scopes:       scopes,
+				}
+				ts := ccConfig.TokenSource(initCtx)
+				baseTransport = &oauth2.Transport{
+					Source: ts,
+					Base:   http.DefaultTransport,
+				}
+			} else if srv.OAuthAccessToken != "" {
+				ts := oauth2.StaticTokenSource(&oauth2.Token{
+					AccessToken: srv.OAuthAccessToken,
+					TokenType:   "Bearer",
+				})
+				baseTransport = &oauth2.Transport{
+					Source: ts,
+					Base:   http.DefaultTransport,
+				}
 			}
+		}
+
+		if len(srv.Headers) > 0 {
+			baseTransport = &headerRoundTripper{
+				headers: srv.Headers,
+				rt:      baseTransport,
+			}
+		}
+
+		httpClient := &http.Client{
+			Transport: baseTransport,
+			Timeout:   60 * time.Second,
 		}
 
 		// First try StreamableClientTransport (MCP Streamable HTTP protocol)

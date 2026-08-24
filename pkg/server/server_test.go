@@ -29,7 +29,11 @@ func TestServerFullRESTSuite(t *testing.T) {
 	defer database.Close()
 
 	memMgr := memory.NewManager(database)
-	skillsLoader := skills.NewLoader(filepath.Join(tempDir, "skills"))
+	skillsDir := filepath.Join(tempDir, "skills")
+	_ = os.MkdirAll(skillsDir, 0755)
+	skillsLoader := skills.NewLoader(skillsDir)
+	_ = skillsLoader.Load()
+
 	toolsReg := tools.NewRegistry()
 	tools.RegisterBuiltinTools(toolsReg, tempDir)
 
@@ -101,5 +105,30 @@ func TestServerFullRESTSuite(t *testing.T) {
 	srv.Router().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("search memory failed: %d", w.Code)
+	}
+
+	// 5. Skills List & On-Demand Refresh
+	req = httptest.NewRequest(http.MethodGet, "/api/skills", nil)
+	w = httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("skills list failed: %d", w.Code)
+	}
+
+	// Dynamically write a new skill to disk
+	_ = os.WriteFile(filepath.Join(skillsDir, "dynamic-skill.md"), []byte("# Dynamic Skill\nDoes something cool"), 0644)
+
+	// Call POST /api/skills/refresh
+	req = httptest.NewRequest(http.MethodPost, "/api/skills/refresh", nil)
+	w = httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("skills refresh failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var refreshedSkills []skills.Skill
+	_ = json.Unmarshal(w.Body.Bytes(), &refreshedSkills)
+	if len(refreshedSkills) != 1 || refreshedSkills[0].Name != "dynamic-skill" {
+		t.Errorf("expected 1 refreshed skill named dynamic-skill, got %+v", refreshedSkills)
 	}
 }

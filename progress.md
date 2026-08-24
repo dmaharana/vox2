@@ -1,13 +1,12 @@
 # Progress Log
 
 ## Session Summary
-- **Skills & Progressive Disclosure**:
-  - Implemented `read_skill` tool and lightweight prompt index in [`pkg/skills/skills.go`](pkg/skills/skills.go).
-  - Added slash command router in [`pkg/llm/orchestrator.go`](pkg/llm/orchestrator.go) (`/help`, `/skills`, `/tools`, `/<skill_name>`, `/<tool_name>`).
-- **Slash Autocomplete UI**:
-  - Created [`web/src/components/SlashAutocomplete.tsx`](web/src/components/SlashAutocomplete.tsx) supporting keyboard navigation (`↑`/`↓`, `Tab`/`Enter`, `Esc`), real-time search filtering, and categorized badges for Skills, Tools, and Commands.
-  - Integrated autocomplete into [`web/src/App.tsx`](web/src/App.tsx).
+- **Skill Companion File Manifest Discovery**:
+  - Implemented automatic file discovery and categorization in [`pkg/skills/skills.go`](pkg/skills/skills.go) for `scripts/`, `references/`, `templates/`, `assets/`.
+  - Updated [`read_skill`](pkg/skills/skills.go) tool to return the skill directory path and structured `available_files` manifest array.
+  - Added unit test in [`pkg/skills/skills_test.go`](pkg/skills/skills_test.go).
+  - Updated UI in [`web/src/components/ToolsSkillsModal.tsx`](web/src/components/ToolsSkillsModal.tsx) to show badge counts for scripts and references.
 - **Verification**:
-  - `pnpm build` completed with 0 errors.
-  - `go test ./...` passed across all suites.
-  - `go build -o go-harness .` verified and ready for production.
+  - `go test -v ./...`: 100% tests passed.
+  - `npm --prefix web run build`: Vite build passed with 0 errors.
+  - `go build -o go-harness .`: Binary built cleanly.

@@ -2,7 +2,12 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"go-harness/pkg/crypto"
+	"go-harness/pkg/db"
 )
 
 func TestConfigLoadDefaults(t *testing.T) {
@@ -20,16 +25,25 @@ func TestConfigLoadDefaults(t *testing.T) {
 	if cfg.SkillsDir != "./skills" {
 		t.Errorf("expected default skills_dir ./skills, got %s", cfg.SkillsDir)
 	}
+	if cfg.LLMAuthType != "api_key" {
+		t.Errorf("expected default llm_auth_type api_key, got %s", cfg.LLMAuthType)
+	}
 }
 
 func TestConfigEnvOverride(t *testing.T) {
 	_ = os.Setenv("PORT", "9090")
 	_ = os.Setenv("LOG_LEVEL", "debug")
 	_ = os.Setenv("LLM_MODEL", "gpt-4o-mini")
+	_ = os.Setenv("LLM_AUTH_TYPE", "oauth2")
+	_ = os.Setenv("LLM_OAUTH_CLIENT_ID", "test-client-id")
+	_ = os.Setenv("LLM_OAUTH_CLIENT_SECRET", "test-client-secret")
 	defer func() {
 		_ = os.Unsetenv("PORT")
 		_ = os.Unsetenv("LOG_LEVEL")
 		_ = os.Unsetenv("LLM_MODEL")
+		_ = os.Unsetenv("LLM_AUTH_TYPE")
+		_ = os.Unsetenv("LLM_OAUTH_CLIENT_ID")
+		_ = os.Unsetenv("LLM_OAUTH_CLIENT_SECRET")
 	}()
 
 	cfg, err := Load()
@@ -46,13 +60,24 @@ func TestConfigEnvOverride(t *testing.T) {
 	if cfg.LLMModel != "gpt-4o-mini" {
 		t.Errorf("expected model gpt-4o-mini, got %s", cfg.LLMModel)
 	}
+	if cfg.LLMAuthType != "oauth2" {
+		t.Errorf("expected auth type oauth2, got %s", cfg.LLMAuthType)
+	}
+	if cfg.LLMOAuthClientID != "test-client-id" {
+		t.Errorf("expected client id test-client-id, got %s", cfg.LLMOAuthClientID)
+	}
 }
 
 func TestConfigUpdate(t *testing.T) {
 	cfg, _ := Load()
 	cfg.Update(Config{
-		LLMModel:  "claude-3-5-sonnet",
-		LLMAPIKey: "secret-key",
+		LLMModel:             "claude-3-5-sonnet",
+		LLMAPIKey:            "secret-key",
+		LLMAuthType:          "oauth2",
+		LLMOAuthClientID:     "cid-123",
+		LLMOAuthClientSecret: "csec-456",
+		LLMOAuthTokenURL:     "https://oauth2.googleapis.com/token",
+		LLMOAuthScopes:       "https://www.googleapis.com/auth/cloud-platform",
 	})
 
 	clone := cfg.Clone()
@@ -61,5 +86,87 @@ func TestConfigUpdate(t *testing.T) {
 	}
 	if clone.LLMAPIKey != "secret-key" {
 		t.Errorf("expected updated api key secret-key, got %s", clone.LLMAPIKey)
+	}
+	if clone.LLMAuthType != "oauth2" {
+		t.Errorf("expected updated auth type oauth2, got %s", clone.LLMAuthType)
+	}
+	if clone.LLMOAuthClientID != "cid-123" {
+		t.Errorf("expected cid-123, got %s", clone.LLMOAuthClientID)
+	}
+	if clone.LLMOAuthClientSecret != "csec-456" {
+		t.Errorf("expected csec-456, got %s", clone.LLMOAuthClientSecret)
+	}
+}
+
+func TestConfigDBSaveAndLoadEncryption(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cfg-db-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	dbPath := filepath.Join(tempDir, "config_test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	cfg, _ := Load()
+	cfg.LLMAPIKey = "sk-test-super-secret-api-key-999"
+	cfg.LLMAuthType = "oauth2"
+	cfg.LLMOAuthClientID = "oauth-client-abc"
+	cfg.LLMOAuthClientSecret = "oauth-client-secret-xyz"
+	cfg.LLMOAuthTokenURL = "https://oauth2.googleapis.com/token"
+	cfg.LLMOAuthScopes = "https://www.googleapis.com/auth/generative-language"
+
+	// Save to DB
+	if err := cfg.SaveToDB(database); err != nil {
+		t.Fatalf("SaveToDB failed: %v", err)
+	}
+
+	// Verify directly in DB that secrets are ENCRYPTED and not stored in plaintext!
+	rawKey, err := database.GetSetting("llm_api_key")
+	if err != nil {
+		t.Fatalf("GetSetting rawKey failed: %v", err)
+	}
+	if !strings.HasPrefix(rawKey, crypto.Prefix) {
+		t.Fatalf("Expected raw API key in DB to have '%s' prefix, got '%s'", crypto.Prefix, rawKey)
+	}
+	if rawKey == "sk-test-super-secret-api-key-999" {
+		t.Fatalf("SECURITY VIOLATION: API key is stored in plain text in database!")
+	}
+
+	rawSecret, err := database.GetSetting("llm_oauth_client_secret")
+	if err != nil {
+		t.Fatalf("GetSetting rawSecret failed: %v", err)
+	}
+	if !strings.HasPrefix(rawSecret, crypto.Prefix) {
+		t.Fatalf("Expected raw client secret in DB to have '%s' prefix, got '%s'", crypto.Prefix, rawSecret)
+	}
+	if rawSecret == "oauth-client-secret-xyz" {
+		t.Fatalf("SECURITY VIOLATION: OAuth client secret is stored in plain text in database!")
+	}
+
+	// Now load into a new config instance and verify decryption works seamlessly
+	cfgLoaded, _ := Load()
+	if err := cfgLoaded.LoadFromDB(database); err != nil {
+		t.Fatalf("LoadFromDB failed: %v", err)
+	}
+
+	if cfgLoaded.LLMAPIKey != "sk-test-super-secret-api-key-999" {
+		t.Errorf("Expected decrypted API key 'sk-test-super-secret-api-key-999', got '%s'", cfgLoaded.LLMAPIKey)
+	}
+	if cfgLoaded.LLMOAuthClientSecret != "oauth-client-secret-xyz" {
+		t.Errorf("Expected decrypted client secret 'oauth-client-secret-xyz', got '%s'", cfgLoaded.LLMOAuthClientSecret)
+	}
+	if cfgLoaded.LLMAuthType != "oauth2" {
+		t.Errorf("Expected auth type 'oauth2', got '%s'", cfgLoaded.LLMAuthType)
+	}
+	if cfgLoaded.LLMOAuthClientID != "oauth-client-abc" {
+		t.Errorf("Expected client ID 'oauth-client-abc', got '%s'", cfgLoaded.LLMOAuthClientID)
+	}
+	if cfgLoaded.LLMOAuthTokenURL != "https://oauth2.googleapis.com/token" {
+		t.Errorf("Expected token URL 'https://oauth2.googleapis.com/token', got '%s'", cfgLoaded.LLMOAuthTokenURL)
 	}
 }

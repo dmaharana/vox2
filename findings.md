@@ -1,18 +1,20 @@
 # Findings & Architecture Insights
 
-## Autocomplete Design for Skills, Tools & Slash Commands
-
-1. **Frontend Autocomplete (`web/src/components/SlashAutocomplete.tsx`)**:
-   - Triggers whenever `input.startsWith('/')` and before the first whitespace.
-   - Dynamically aggregates:
-     - **System Commands**: `/help`, `/skills`, `/tools` (badge: `Command`, icon: `Terminal`).
-     - **Discovered Skills**: `/<skill_name>` (badge: `Skill`, icon: `Sparkles`).
-     - **Registered Tools**: `/<tool_name>` (badge: category e.g. `builtin`, `memory`, `flow`, `mcp`, icon: `Wrench`).
-   - Filters in real-time as user types after `/`.
-   - Full keyboard accessibility: `ArrowUp`/`ArrowDown` for selection, `Tab`/`Enter` to autocomplete, and `Escape` to dismiss.
-   - Positioned in a glassmorphic popover above the input textarea with automatic scrolling for active items.
-
-2. **Backend Direct Execution & Directives (`pkg/llm/orchestrator.go`)**:
-   - `/tools`: Instantly outputs an interactive table of all registered tools and their categories without LLM overhead.
-   - `/<tool_name> [args]` / `/tool <name> [args]`: Directly primes the LLM with an explicit directive to execute that specific tool.
-   - `/<skill_name> [prompt]` / `/skill <name> [prompt]`: Injects that skill's full instructions into the current turn.
+## Skill Companion File Manifest Architecture
+1. **Skill Folder Organization**:
+   - Skills can be organized as modular folders:
+     - `skills/<skill_name>/SKILL.md` (Main instructions & frontmatter)
+     - `skills/<skill_name>/scripts/*` (Executable scripts e.g. `.sh`, `.py`, `.js`)
+     - `skills/<skill_name>/references/*` (Reference data, schemas, policies e.g. `.json`, `.yaml`, `.md`)
+     - `skills/<skill_name>/templates/*` (File templates e.g. `.yaml`, `.j2`, `.env.example`)
+2. **Dynamic Manifest in `read_skill`**:
+   - When the LLM loads a skill via `read_skill`, `pkg/skills/skills.go` will inspect the skill's root folder and return:
+     - `directory`: Full filesystem path to the skill directory.
+     - `available_files`: List of `{ path: "scripts/deploy.sh", category: "script", size_bytes: 1234 }`.
+   - Categories:
+     - `script`: in `scripts/` or extensions `.sh`, `.py`, `.js`, `.ts`, `.bash`, `.rb`
+     - `template`: in `templates/`
+     - `reference`: in `references/` or docs/data formats
+     - `asset`: images/binaries
+     - `other`: general files
+   - This provides zero-effort script and reference discovery for LLMs without requiring the skill author to manually list every file.

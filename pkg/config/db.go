@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"go-harness/pkg/crypto"
 	"go-harness/pkg/db"
 )
 
@@ -27,7 +28,32 @@ func (c *Config) LoadFromDB(database *db.DB) error {
 		c.LLMModel = v
 	}
 	if v, ok := settings["llm_api_key"]; ok && v != "" {
-		c.LLMAPIKey = v
+		decrypted, err := crypto.Decrypt(v)
+		if err == nil {
+			c.LLMAPIKey = decrypted
+		} else {
+			c.LLMAPIKey = v
+		}
+	}
+	if v, ok := settings["llm_auth_type"]; ok && v != "" {
+		c.LLMAuthType = v
+	}
+	if v, ok := settings["llm_oauth_client_id"]; ok && v != "" {
+		c.LLMOAuthClientID = v
+	}
+	if v, ok := settings["llm_oauth_client_secret"]; ok && v != "" {
+		decrypted, err := crypto.Decrypt(v)
+		if err == nil {
+			c.LLMOAuthClientSecret = decrypted
+		} else {
+			c.LLMOAuthClientSecret = v
+		}
+	}
+	if v, ok := settings["llm_oauth_token_url"]; ok && v != "" {
+		c.LLMOAuthTokenURL = v
+	}
+	if v, ok := settings["llm_oauth_scopes"]; ok && v != "" {
+		c.LLMOAuthScopes = v
 	}
 	if v, ok := settings["llm_temperature"]; ok && v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
@@ -59,9 +85,29 @@ func (c *Config) SaveToDB(database *db.DB) error {
 
 	_ = database.SetSetting("llm_base_url", c.LLMBaseURL)
 	_ = database.SetSetting("llm_model", c.LLMModel)
+
 	if c.LLMAPIKey != "" {
-		_ = database.SetSetting("llm_api_key", c.LLMAPIKey)
+		encryptedKey, err := crypto.Encrypt(c.LLMAPIKey)
+		if err == nil {
+			_ = database.SetSetting("llm_api_key", encryptedKey)
+		} else {
+			_ = database.SetSetting("llm_api_key", c.LLMAPIKey)
+		}
 	}
+
+	_ = database.SetSetting("llm_auth_type", c.LLMAuthType)
+	_ = database.SetSetting("llm_oauth_client_id", c.LLMOAuthClientID)
+	if c.LLMOAuthClientSecret != "" {
+		encryptedSecret, err := crypto.Encrypt(c.LLMOAuthClientSecret)
+		if err == nil {
+			_ = database.SetSetting("llm_oauth_client_secret", encryptedSecret)
+		} else {
+			_ = database.SetSetting("llm_oauth_client_secret", c.LLMOAuthClientSecret)
+		}
+	}
+	_ = database.SetSetting("llm_oauth_token_url", c.LLMOAuthTokenURL)
+	_ = database.SetSetting("llm_oauth_scopes", c.LLMOAuthScopes)
+
 	_ = database.SetSetting("llm_temperature", fmt.Sprintf("%f", c.LLMTemperature))
 	_ = database.SetSetting("llm_max_tokens", fmt.Sprintf("%d", c.LLMMaxTokens))
 	_ = database.SetSetting("log_level", c.LogLevel)

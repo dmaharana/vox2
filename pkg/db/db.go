@@ -136,6 +136,12 @@ func (d *DB) migrate() error {
 		env TEXT DEFAULT '{}',
 		url TEXT DEFAULT '',
 		headers TEXT DEFAULT '{}',
+		auth_type TEXT DEFAULT '',
+		oauth_client_id TEXT DEFAULT '',
+		oauth_client_secret TEXT DEFAULT '',
+		oauth_token_url TEXT DEFAULT '',
+		oauth_scopes TEXT DEFAULT '',
+		oauth_access_token TEXT DEFAULT '',
 		enabled INTEGER DEFAULT 1,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL
@@ -151,6 +157,13 @@ func (d *DB) migrate() error {
 	_, _ = d.db.Exec(`ALTER TABLE messages ADD COLUMN subflows TEXT DEFAULT ''`)
 	_, _ = d.db.Exec(`ALTER TABLE messages ADD COLUMN memories_retrieved TEXT DEFAULT ''`)
 	_, _ = d.db.Exec(`ALTER TABLE messages ADD COLUMN trace_id TEXT DEFAULT ''`)
+
+	_, _ = d.db.Exec(`ALTER TABLE mcp_servers ADD COLUMN auth_type TEXT DEFAULT ''`)
+	_, _ = d.db.Exec(`ALTER TABLE mcp_servers ADD COLUMN oauth_client_id TEXT DEFAULT ''`)
+	_, _ = d.db.Exec(`ALTER TABLE mcp_servers ADD COLUMN oauth_client_secret TEXT DEFAULT ''`)
+	_, _ = d.db.Exec(`ALTER TABLE mcp_servers ADD COLUMN oauth_token_url TEXT DEFAULT ''`)
+	_, _ = d.db.Exec(`ALTER TABLE mcp_servers ADD COLUMN oauth_scopes TEXT DEFAULT ''`)
+	_, _ = d.db.Exec(`ALTER TABLE mcp_servers ADD COLUMN oauth_access_token TEXT DEFAULT ''`)
 
 	return nil
 }
