@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { ChatMessage, ToolCallState, SubflowState, MemoryItem } from './types'
-import { fetchConversation } from './lib/api'
+import { ChatMessage, ToolCallState, SubflowState, MemoryItem, ToolDefinition, Skill } from './types'
+import { fetchConversation, fetchTools, fetchSkills } from './lib/api'
 import { ThemeProvider } from './lib/theme'
 import { ChatMessageList } from './components/ChatMessageList'
 import { SettingsModal } from './components/SettingsModal'
@@ -10,6 +10,7 @@ import { MemoryModal } from './components/MemoryModal'
 import { ConversationsDrawer } from './components/ConversationsDrawer'
 import { AppSidebar } from './components/AppSidebar'
 import { VoxLogo } from './components/VoxLogo'
+import { SlashAutocomplete, getMatchingSlashItems, SlashItem } from './components/SlashAutocomplete'
 import { Button } from './components/ui/button'
 import { Textarea } from './components/ui/textarea'
 import { Badge } from './components/ui/badge'
@@ -44,6 +45,18 @@ export function AppContent() {
   const [toolsOpen, setToolsOpen] = useState(false)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+
+  // Tools & Skills for Slash Command Autocomplete
+  const [availableTools, setAvailableTools] = useState<ToolDefinition[]>([])
+  const [availableSkills, setAvailableSkills] = useState<Skill[]>([])
+  const [slashIndex, setSlashIndex] = useState(0)
+  const [slashOpen, setSlashOpen] = useState(true)
+
+  // Load tools & skills for autocomplete & registry
+  useEffect(() => {
+    fetchTools().then((t) => setAvailableTools(Array.isArray(t) ? t : [])).catch(console.error)
+    fetchSkills().then((s) => setAvailableSkills(Array.isArray(s) ? s : [])).catch(console.error)
+  }, [toolsOpen])
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
@@ -337,7 +350,48 @@ export function AppContent() {
     }
   }
 
+  const matchingSlashItems = getMatchingSlashItems(input, availableTools, availableSkills)
+  const isSlashActive = slashOpen && matchingSlashItems.length > 0
+
+  const handleSelectSlashItem = (item: SlashItem) => {
+    setInput(`${item.label} `)
+    setSlashOpen(false)
+  }
+
+  const handleInputChange = (val: string) => {
+    setInput(val)
+    if (val.startsWith('/') && !val.includes(' ')) {
+      setSlashOpen(true)
+      setSlashIndex(0)
+    }
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isSlashActive) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashIndex((prev) => (prev + 1) % matchingSlashItems.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashIndex((prev) => (prev - 1 + matchingSlashItems.length) % matchingSlashItems.length)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        if (matchingSlashItems[slashIndex]) {
+          handleSelectSlashItem(matchingSlashItems[slashIndex])
+          return
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashOpen(false)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -451,10 +505,18 @@ export function AppContent() {
         <footer className="border-t bg-card/50 px-4 py-3 shrink-0">
           <div className="max-w-4xl mx-auto space-y-2">
             <div className="flex items-end gap-2 relative">
+              <SlashAutocomplete
+                input={input}
+                tools={availableTools}
+                skills={availableSkills}
+                selectedIndex={slashIndex}
+                onSelect={handleSelectSlashItem}
+                visible={isSlashActive}
+              />
               <Textarea
-                placeholder="Ask anything, execute tools, or trigger parallel subflows..."
+                placeholder="Ask anything, type / for skills & tools, or trigger parallel subflows..."
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => handleInputChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 rows={2}
                 className="resize-none pr-12 min-h-[56px] max-h-[160px] text-sm"
