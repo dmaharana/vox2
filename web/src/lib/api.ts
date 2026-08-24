@@ -40,6 +40,16 @@ export async function fetchSkills(): Promise<Skill[]> {
   return Array.isArray(data) ? data : []
 }
 
+export async function refreshSkills(): Promise<Skill[]> {
+  const res = await fetch(`${BASE_URL}/api/skills/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) throw new Error('Failed to refresh skills from disk')
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
 export async function toggleSkill(name: string, enabled: boolean): Promise<void> {
   await fetch(`${BASE_URL}/api/skills/${encodeURIComponent(name)}/toggle`, {
     method: 'POST',

@@ -6,10 +6,18 @@ export interface ToolDefinition {
   parameters?: any
 }
 
+export interface SkillFile {
+  path: string
+  category: 'script' | 'reference' | 'template' | 'asset' | 'other'
+  size_bytes: number
+}
+
 export interface Skill {
   name: string
   description: string
   path: string
+  directory?: string
+  files?: SkillFile[]
   content: string
   enabled: boolean
 }
@@ -23,6 +31,14 @@ export interface MCPServer {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  auth_type?: 'none' | 'headers' | 'oauth2' | 'oauth2_google'
+  oauth_client_id?: string
+  oauth_client_secret?: string
+  has_oauth_client_secret?: boolean
+  oauth_token_url?: string
+  oauth_scopes?: string
+  oauth_access_token?: string
+  has_oauth_access_token?: boolean
   enabled: boolean
   status: 'connected' | 'disconnected' | 'error'
   last_error?: string
@@ -81,6 +97,11 @@ export interface Settings {
   llm_base_url: string
   llm_model: string
   has_api_key: boolean
+  llm_auth_type?: string
+  llm_oauth_client_id?: string
+  has_oauth_client_secret?: boolean
+  llm_oauth_token_url?: string
+  llm_oauth_scopes?: string
   llm_temperature: number
   llm_max_tokens: number
   log_level: string
