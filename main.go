@@ -80,6 +80,9 @@ func main() {
 	// Register built-in filesystem tools
 	tools.RegisterBuiltinTools(toolsReg, ".")
 
+	// Register skill tools (on-demand progressive disclosure)
+	skillsLoader.RegisterSkillTools(toolsReg)
+
 	// Register cognitive memory tools
 	memMgr.RegisterMemoryTools(toolsReg)
 

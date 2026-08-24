@@ -88,7 +88,122 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 		})
 	}
 
-	// 2. Query relevant memory context (FTS5 search)
+	// 2. Intercept Slash Commands (e.g., /help, /skills, /skill <name>, /<skill_name>)
+	trimmedContent := strings.TrimSpace(msg.Content)
+	var directSkillSection string
+
+	if strings.HasPrefix(trimmedContent, "/") {
+		parts := strings.Fields(trimmedContent)
+		cmd := strings.TrimPrefix(parts[0], "/")
+
+		switch strings.ToLower(cmd) {
+		case "help":
+			helpText := "### ⚡ Slash Commands Reference\n\n" +
+				"- `/<skill_name> [prompt]` or `/skill <name> [prompt]` — Directly invoke a skill with its runbook.\n" +
+				"- `/<tool_name> [args]` or `/tool <name> [args]` — Directly trigger a specific tool.\n" +
+				"- `/skills` — List all discovered skills and their statuses.\n" +
+				"- `/tools` — List all registered tools and their categories.\n" +
+				"- `/help` — Show this slash command reference.\n"
+			o.sendDirectResponse(convID, wsClient, helpText)
+			return
+
+		case "skills":
+			var sb strings.Builder
+			sb.WriteString("### 🛠️ Loaded Skills\n\n")
+			if o.skillsLoader == nil || len(o.skillsLoader.List()) == 0 {
+				sb.WriteString("No skills currently discovered in the skills folder.\n")
+			} else {
+				sb.WriteString("| Skill Name | Status | Description |\n|---|:---:|---|\n")
+				for _, s := range o.skillsLoader.List() {
+					status := "🟢 Active"
+					if !s.Enabled {
+						status = "🔴 Disabled"
+					}
+					sb.WriteString(fmt.Sprintf("| `%s` | %s | %s |\n", s.Name, status, s.Description))
+				}
+				sb.WriteString("\n*Type `/<skill_name> [prompt]` to invoke a skill directly, or use the `read_skill` tool.*")
+			}
+			o.sendDirectResponse(convID, wsClient, sb.String())
+			return
+
+		case "tools":
+			var sb strings.Builder
+			sb.WriteString("### 🔧 Registered Agent Tools\n\n")
+			if o.toolsReg == nil || len(o.toolsReg.List()) == 0 {
+				sb.WriteString("No tools currently registered in the registry.\n")
+			} else {
+				sb.WriteString("| Tool Name | Category | Status | Description |\n|---|:---:|:---:|---|\n")
+				for _, t := range o.toolsReg.List() {
+					status := "🟢 Active"
+					if !t.Enabled {
+						status = "🔴 Disabled"
+					}
+					sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s |\n", t.Name, t.Category, status, t.Description))
+				}
+				sb.WriteString("\n*Type `/<tool_name> [args]` to trigger a tool directly.*")
+			}
+			o.sendDirectResponse(convID, wsClient, sb.String())
+			return
+
+		case "skill":
+			if len(parts) >= 2 {
+				skillName := parts[1]
+				skill, ok := o.findSkill(skillName)
+				if !ok {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Skill `%s` not found. Type `/skills` to see available skills.", skillName))
+					return
+				}
+				if !skill.Enabled {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Skill `%s` is currently disabled. Enable it in the Tools & Skills modal first.", skill.Name))
+					return
+				}
+				directSkillSection = fmt.Sprintf("\n## Direct Invocation: Skill '%s'\n**Description:** %s\n\n%s\n", skill.Name, skill.Description, skill.Content)
+			} else {
+				o.sendDirectResponse(convID, wsClient, "Usage: `/skill <skill_name> [prompt...]` (e.g. `/skill code-review Check this function`)")
+				return
+			}
+
+		case "tool":
+			if len(parts) >= 2 {
+				toolName := parts[1]
+				t, ok := o.toolsReg.Get(toolName)
+				if !ok {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Tool `%s` not found. Type `/tools` to see available tools.", toolName))
+					return
+				}
+				if !t.Enabled {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Tool `%s` is currently disabled. Enable it in the Tools & Skills modal first.", t.Name))
+					return
+				}
+				directSkillSection = fmt.Sprintf("\n## Direct Tool Invocation: '%s'\n**Directive:** The user explicitly triggered the `%s` tool (%s). Prioritize executing the `%s` tool to fulfill this turn's request.\n", t.Name, t.Name, t.Description, t.Name)
+			} else {
+				o.sendDirectResponse(convID, wsClient, "Usage: `/tool <tool_name> [args...]` (e.g. `/tool read_file main.go`)")
+				return
+			}
+
+		default:
+			// Check if the command matches any skill name directly (e.g. /code-review ...)
+			if skill, ok := o.findSkill(cmd); ok {
+				if !skill.Enabled {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Skill `%s` is currently disabled. Enable it in the Tools & Skills modal first.", skill.Name))
+					return
+				}
+				directSkillSection = fmt.Sprintf("\n## Direct Invocation: Skill '%s'\n**Description:** %s\n\n%s\n", skill.Name, skill.Description, skill.Content)
+			} else if t, ok := o.toolsReg.Get(cmd); ok {
+				// Check if command matches a tool directly (e.g. /read_file ...)
+				if !t.Enabled {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Tool `%s` is currently disabled. Enable it in the Tools & Skills modal first.", t.Name))
+					return
+				}
+				directSkillSection = fmt.Sprintf("\n## Direct Tool Invocation: '%s'\n**Directive:** The user explicitly triggered the `%s` tool (%s). Prioritize executing the `%s` tool to fulfill this turn's request.\n", t.Name, t.Name, t.Description, t.Name)
+			} else {
+				o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❓ Unknown command `/%s`. Type `/help`, `/skills`, or `/tools` to see available commands.", cmd))
+				return
+			}
+		}
+	}
+
+	// 3. Query relevant memory context (FTS5 search)
 	var memorySection string
 	var retrievedMemories []memory.MemoryItem
 	if o.memoryMgr != nil && msg.Content != "" {
@@ -117,7 +232,7 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 		}
 	}
 
-	// 3. Build system prompt (base + skills + memories)
+	// 4. Build system prompt (base + skills + direct skill invocation + memories)
 	var skillsSection string
 	if o.skillsLoader != nil {
 		skillsSection = o.skillsLoader.BuildPromptSection()
@@ -139,8 +254,9 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			"CITATION & SOURCE REFERENCE RULES:\n"+
 			"1. Whenever you reference, explain, or extract code/data from a file, MCP tool, memory item, or URL, include an inline clickable markdown link pointing directly to the specific source (e.g. `[filename.go](file:///path/to/filename.go#L10-L25)` or `[ToolName](tool://tool_name)` or `[API URL](http://...)`).\n"+
 			"2. At the end of every response where external files, tools, skills, or documentation are used, conclude with a structured `### 📚 References` section listing all referenced sources with clickable links and brief 1-line context.\n\n"+
-			"%s\n%s",
+			"%s\n%s\n%s",
 		skillsSection,
+		directSkillSection,
 		memorySection,
 	)
 
@@ -430,6 +546,58 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			Payload: map[string]any{
 				"conversation_id": convID,
 				"content":         finalAssistantText.String(),
+				"disclaimer":      "AI can make mistakes, so double-check responses",
+			},
+		})
+	}
+}
+
+func (o *Orchestrator) findSkill(name string) (*skills.Skill, bool) {
+	if o.skillsLoader == nil {
+		return nil, false
+	}
+	s, ok := o.skillsLoader.Get(name)
+	if ok {
+		return s, true
+	}
+	// Case-insensitive lookup
+	cleanName := strings.ToLower(strings.TrimSpace(name))
+	for _, item := range o.skillsLoader.List() {
+		if strings.ToLower(item.Name) == cleanName {
+			sCopy := item
+			return &sCopy, true
+		}
+	}
+	return nil, false
+}
+
+func (o *Orchestrator) sendDirectResponse(convID string, wsClient *ws.Client, content string) {
+	if wsClient != nil {
+		wsClient.Send(ws.OutboundMessage{
+			Type:           ws.TypeToken,
+			ConversationID: convID,
+			Payload: ws.TokenPayload{
+				Delta:    content,
+				FullText: content,
+			},
+		})
+	}
+
+	if o.db != nil {
+		_ = o.db.AddMessage(db.Message{
+			ConversationID: convID,
+			Role:           "assistant",
+			Content:        content,
+		})
+	}
+
+	if wsClient != nil {
+		wsClient.Send(ws.OutboundMessage{
+			Type:           ws.TypeDone,
+			ConversationID: convID,
+			Payload: map[string]any{
+				"conversation_id": convID,
+				"content":         content,
 				"disclaimer":      "AI can make mistakes, so double-check responses",
 			},
 		})

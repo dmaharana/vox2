@@ -123,3 +123,93 @@ func TestReadStreamChunk(t *testing.T) {
 	toolCallMap := make(map[int]*json.RawMessage)
 	_ = toolCallMap
 }
+
+func TestSlashCommands(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "slash-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	database, _ := db.Open(filepath.Join(tempDir, "test.db"))
+	defer database.Close()
+
+	skillsDir := filepath.Join(tempDir, "skills")
+	_ = os.MkdirAll(filepath.Join(skillsDir, "deploy-k8s"), 0755)
+	_ = os.WriteFile(filepath.Join(skillsDir, "deploy-k8s", "SKILL.md"), []byte(`---
+name: deploy-k8s
+description: Kubernetes deployment runbook
+---
+Step 1: Check kubectl cluster info.
+Step 2: Apply k8s manifests.`), 0644)
+
+	skillsLoader := skills.NewLoader(skillsDir)
+	_ = skillsLoader.Load()
+
+	toolsReg := tools.NewRegistry()
+	skillsLoader.RegisterSkillTools(toolsReg)
+
+	cfg := &config.Config{
+		LLMBaseURL: "http://mock/v1",
+		LLMModel:   "gpt-4o",
+	}
+
+	orchestrator := NewOrchestrator(cfg, database, nil, skillsLoader, toolsReg, nil)
+
+	// 1. Test /help
+	helpMsg := ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-help",
+		Content:        "/help",
+	}
+	orchestrator.HandleChatMessage(context.Background(), nil, helpMsg)
+	history, err := database.GetMessages("conv-help")
+	if err != nil || len(history) < 2 {
+		t.Fatalf("expected /help response saved in DB, got %d messages", len(history))
+	}
+	if history[0].Content != "/help" || history[1].Role != "assistant" {
+		t.Errorf("unexpected help message history: %+v", history)
+	}
+
+	// 2. Test /skills
+	skillsMsg := ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-skills",
+		Content:        "/skills",
+	}
+	orchestrator.HandleChatMessage(context.Background(), nil, skillsMsg)
+	historySkills, err := database.GetMessages("conv-skills")
+	if err != nil || len(historySkills) < 2 {
+		t.Fatalf("expected /skills response saved in DB, got %d messages", len(historySkills))
+	}
+	if historySkills[1].Role != "assistant" {
+		t.Errorf("unexpected skills message history: %+v", historySkills)
+	}
+
+	// 3. Test /tools
+	toolsMsg := ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-tools",
+		Content:        "/tools",
+	}
+	orchestrator.HandleChatMessage(context.Background(), nil, toolsMsg)
+	historyTools, err := database.GetMessages("conv-tools")
+	if err != nil || len(historyTools) < 2 {
+		t.Fatalf("expected /tools response saved in DB, got %d messages", len(historyTools))
+	}
+	if historyTools[1].Role != "assistant" {
+		t.Errorf("unexpected tools message history: %+v", historyTools)
+	}
+
+	// 4. Test unknown command
+	unknownMsg := ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-unknown",
+		Content:        "/unknown_cmd",
+	}
+	orchestrator.HandleChatMessage(context.Background(), nil, unknownMsg)
+	historyUnknown, err := database.GetMessages("conv-unknown")
+	if err != nil || len(historyUnknown) < 2 {
+		t.Fatalf("expected unknown response saved in DB, got %d messages", len(historyUnknown))
+	}
+}

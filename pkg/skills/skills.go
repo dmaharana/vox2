@@ -3,13 +3,18 @@ package skills
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"go-harness/pkg/tools"
+
 	"github.com/rs/zerolog/log"
+	"github.com/sashabaranov/go-openai/jsonschema"
 )
 
 // Skill represents a loaded skill capability.
@@ -129,7 +134,7 @@ func (l *Loader) SetEnabled(name string, enabled bool) bool {
 	return true
 }
 
-// BuildPromptSection generates a formatted system prompt segment listing active skills.
+// BuildPromptSection generates a formatted system prompt segment listing active skills (metadata index for progressive disclosure).
 func (l *Loader) BuildPromptSection() string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -146,19 +151,76 @@ func (l *Loader) BuildPromptSection() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("\n## Available Skills\n")
-	sb.WriteString("You have access to specialized domain skills. Follow their guidelines when relevant:\n\n")
+	sb.WriteString("\n## Available Skills (Progressive Disclosure)\n")
+	sb.WriteString("You have access to specialized domain skills listed below. Only lightweight metadata is shown.\n")
+	sb.WriteString("When a task matches or requires a skill, or when instructed by the user, invoke the `read_skill` tool with the skill's `name` to load its full step-by-step instructions and runbooks before executing the task:\n\n")
 
 	for _, s := range active {
-		sb.WriteString(fmt.Sprintf("### Skill: %s\n", s.Name))
-		if s.Description != "" {
-			sb.WriteString(fmt.Sprintf("**Description:** %s\n\n", s.Description))
-		}
-		sb.WriteString(s.Content)
-		sb.WriteString("\n\n---\n\n")
+		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
 	}
 
 	return sb.String()
+}
+
+// RegisterSkillTools registers skill-related tools into the agent tool registry.
+func (l *Loader) RegisterSkillTools(reg *tools.Registry) {
+	reg.Register(l.newReadSkillTool())
+}
+
+func (l *Loader) newReadSkillTool() tools.ToolDefinition {
+	return tools.ToolDefinition{
+		Name:        "read_skill",
+		Description: "Loads and retrieves the full domain instructions, workflow guidelines, and runbooks for a specific named skill.",
+		Category:    "builtin",
+		Enabled:     true,
+		Parameters: jsonschema.Definition{
+			Type: jsonschema.Object,
+			Properties: map[string]jsonschema.Definition{
+				"name": {
+					Type:        jsonschema.String,
+					Description: "The exact name of the skill to load and read (e.g. 'code-review')",
+				},
+			},
+			Required: []string{"name"},
+		},
+		Handler: func(ctx context.Context, args json.RawMessage) (any, error) {
+			var in struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
+				return nil, fmt.Errorf("invalid arguments: %w", err)
+			}
+			if strings.TrimSpace(in.Name) == "" {
+				return nil, fmt.Errorf("skill name is required")
+			}
+
+			s, ok := l.Get(strings.TrimSpace(in.Name))
+			if !ok {
+				// Try case-insensitive lookup
+				for _, item := range l.List() {
+					if strings.EqualFold(item.Name, strings.TrimSpace(in.Name)) {
+						s = &item
+						ok = true
+						break
+					}
+				}
+			}
+
+			if !ok {
+				return nil, fmt.Errorf("skill '%s' not found", in.Name)
+			}
+			if !s.Enabled {
+				return nil, fmt.Errorf("skill '%s' is currently disabled", in.Name)
+			}
+
+			return map[string]any{
+				"name":        s.Name,
+				"description": s.Description,
+				"content":     s.Content,
+				"path":        s.Path,
+			}, nil
+		},
+	}
 }
 
 func parseSkillFile(filePath, defaultName string) (*Skill, error) {
