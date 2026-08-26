@@ -88,18 +88,19 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 		})
 	}
 
-	// 2. Intercept Slash Commands (e.g., /help, /skills, /skill <name>, /<skill_name>)
+	// 2. Intercept Slash Commands (e.g., /help, /skills, /skill <name>, /skill:<name>, /<skill_name>)
 	trimmedContent := strings.TrimSpace(msg.Content)
 	var directSkillSection string
 
 	if strings.HasPrefix(trimmedContent, "/") {
 		parts := strings.Fields(trimmedContent)
 		cmd := strings.TrimPrefix(parts[0], "/")
+		promptArg := strings.TrimSpace(strings.TrimPrefix(trimmedContent, parts[0]))
 
-		switch strings.ToLower(cmd) {
-		case "help":
+		switch {
+		case strings.EqualFold(cmd, "help"):
 			helpText := "### ⚡ Slash Commands Reference\n\n" +
-				"- `/<skill_name> [prompt]` or `/skill <name> [prompt]` — Directly invoke a skill with its runbook.\n" +
+				"- `/<skill_name> [prompt]` or `/skill <name> [prompt]` or `/skill:<name> [prompt]` — Directly invoke a skill with its runbook.\n" +
 				"- `/<tool_name> [args]` or `/tool <name> [args]` — Directly trigger a specific tool.\n" +
 				"- `/skills` — List all discovered skills and their statuses.\n" +
 				"- `/tools` — List all registered tools and their categories.\n" +
@@ -107,11 +108,11 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			o.sendDirectResponse(convID, wsClient, helpText)
 			return
 
-		case "skills":
+		case strings.EqualFold(cmd, "skills"):
 			var sb strings.Builder
 			sb.WriteString("### 🛠️ Loaded Skills\n\n")
 			if o.skillsLoader == nil || len(o.skillsLoader.List()) == 0 {
-				sb.WriteString("No skills currently discovered in the skills folder.\n")
+				sb.WriteString("No skills currently discovered in configured skill locations.\n")
 			} else {
 				sb.WriteString("| Skill Name | Status | Description |\n|---|:---:|---|\n")
 				for _, s := range o.skillsLoader.List() {
@@ -121,12 +122,12 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 					}
 					sb.WriteString(fmt.Sprintf("| `%s` | %s | %s |\n", s.Name, status, s.Description))
 				}
-				sb.WriteString("\n*Type `/<skill_name> [prompt]` to invoke a skill directly, or use the `read_skill` tool.*")
+				sb.WriteString("\n*Type `/<skill_name> [prompt]` or `/skill:<name>` to invoke a skill directly, or use the `read_skill` tool.*")
 			}
 			o.sendDirectResponse(convID, wsClient, sb.String())
 			return
 
-		case "tools":
+		case strings.EqualFold(cmd, "tools"):
 			var sb strings.Builder
 			sb.WriteString("### 🔧 Registered Agent Tools\n\n")
 			if o.toolsReg == nil || len(o.toolsReg.List()) == 0 {
@@ -145,9 +146,16 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			o.sendDirectResponse(convID, wsClient, sb.String())
 			return
 
-		case "skill":
-			if len(parts) >= 2 {
-				skillName := parts[1]
+		case strings.EqualFold(cmd, "skill") || strings.HasPrefix(strings.ToLower(cmd), "skill:"):
+			var skillName string
+			if strings.HasPrefix(strings.ToLower(cmd), "skill:") {
+				skillName = strings.TrimPrefix(cmd, "skill:")
+			} else if len(parts) >= 2 {
+				skillName = parts[1]
+				promptArg = strings.TrimSpace(strings.TrimPrefix(trimmedContent, parts[0]+" "+parts[1]))
+			}
+
+			if skillName != "" {
 				skill, ok := o.findSkill(skillName)
 				if !ok {
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Skill `%s` not found. Type `/skills` to see available skills.", skillName))
@@ -157,13 +165,17 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Skill `%s` is currently disabled. Enable it in the Tools & Skills modal first.", skill.Name))
 					return
 				}
-				directSkillSection = fmt.Sprintf("\n## Direct Invocation: Skill '%s'\n**Description:** %s\n\n%s\n", skill.Name, skill.Description, skill.Content)
+				promptSuffix := ""
+				if promptArg != "" {
+					promptSuffix = fmt.Sprintf("\n\n**User Task:** %s", promptArg)
+				}
+				directSkillSection = fmt.Sprintf("\n## Direct Invocation: Skill '%s'\n**Description:** %s\n\n%s%s\n", skill.Name, skill.Description, skill.Content, promptSuffix)
 			} else {
-				o.sendDirectResponse(convID, wsClient, "Usage: `/skill <skill_name> [prompt...]` (e.g. `/skill code-review Check this function`)")
+				o.sendDirectResponse(convID, wsClient, "Usage: `/skill <skill_name> [prompt...]` or `/skill:<name> [prompt...]` (e.g. `/skill:code-review Check this function`)")
 				return
 			}
 
-		case "tool":
+		case strings.EqualFold(cmd, "tool"):
 			if len(parts) >= 2 {
 				toolName := parts[1]
 				t, ok := o.toolsReg.Get(toolName)
@@ -188,7 +200,11 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Skill `%s` is currently disabled. Enable it in the Tools & Skills modal first.", skill.Name))
 					return
 				}
-				directSkillSection = fmt.Sprintf("\n## Direct Invocation: Skill '%s'\n**Description:** %s\n\n%s\n", skill.Name, skill.Description, skill.Content)
+				promptSuffix := ""
+				if promptArg != "" {
+					promptSuffix = fmt.Sprintf("\n\n**User Task:** %s", promptArg)
+				}
+				directSkillSection = fmt.Sprintf("\n## Direct Invocation: Skill '%s'\n**Description:** %s\n\n%s%s\n", skill.Name, skill.Description, skill.Content, promptSuffix)
 			} else if t, ok := o.toolsReg.Get(cmd); ok {
 				// Check if command matches a tool directly (e.g. /read_file ...)
 				if !t.Enabled {
@@ -242,6 +258,11 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 		"You are Vox2, an advanced, intelligent AI engineering assistant and agent harness.\n"+
 			"Follow user instructions thoroughly. Use the provided tools when appropriate to read/write/edit files, execute local scripts, execute parallel subflows, search/save memory, or interact with MCP servers.\n"+
 			"Always be accurate, direct, and helpful. Format your responses in clean Markdown.\n\n"+
+			"FILE EDITING & MUTATION RULES:\n"+
+			"1. Use the `edit` (or `edit_file`) tool for precise targeted modifications in existing files. `oldText` must match a unique block of text in the target file.\n"+
+			"2. When changing multiple separate locations in one file, use a single `edit` call with multiple items in `edits: [{oldText, newText}]` rather than making sequential single edits.\n"+
+			"3. Keep `oldText` as small as possible while remaining unique. Do not include large unchanged regions just to pad context.\n"+
+			"4. Use `write_file` when creating new files or completely rewriting entire file contents from scratch.\n\n"+
 			"LOCAL SCRIPT EXECUTION RULES:\n"+
 			"1. When data analysis, calculation, script execution, or code verification is requested or needed, use the `execute_script` tool.\n"+
 			"2. You can generate and execute Python (`language: 'python'`), Node.js/JavaScript (`language: 'javascript'`), PowerShell (`language: 'powershell'`), Windows Batch/CMD (`language: 'bat'`), or Bash (`language: 'bash'`) scripts.\n"+

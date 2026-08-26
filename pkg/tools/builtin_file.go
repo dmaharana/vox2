@@ -22,6 +22,8 @@ func RegisterBuiltinTools(r *Registry, rootDir string) {
 
 	r.Register(NewReadFileTool(rootDir))
 	r.Register(NewWriteFileTool(rootDir))
+	r.Register(NewEditTool(rootDir))
+	r.Register(NewEditFileTool(rootDir))
 	r.Register(NewUpdateFileTool(rootDir))
 	r.Register(NewListDirectoryTool(rootDir))
 	r.Register(NewExecuteScriptTool(rootDir))
