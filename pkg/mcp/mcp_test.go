@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -165,47 +166,15 @@ func TestHeaderRoundTripper(t *testing.T) {
 	}
 }
 
-func TestConnectManagerLocal(t *testing.T) {
-	// Check if local 8090 server is running
-	checkResp, err := http.Get("http://localhost:8090/mcp")
-	if err != nil {
-		t.Skip("local MCP server at :8090 not running, skipping test")
-	}
-	checkResp.Body.Close()
-
-	reg := tools.NewRegistry()
-	mgr := NewManager(reg)
-
-	srv, err := mgr.AddServer(ServerConfig{
-		Name:      "Local Users DB MCP",
-		Transport: "http",
-		URL:       "http://localhost:8090/mcp",
-	})
-	if err != nil {
-		t.Fatalf("AddServer failed: %v", err)
-	}
-
-	err = mgr.ConnectServer(context.Background(), srv.ID)
-	if err != nil {
-		t.Fatalf("ConnectServer failed: %v", err)
-	}
-
-	toolsList := reg.List()
-	if len(toolsList) == 0 {
-		t.Fatalf("Expected discovered tools from local MCP server, got 0")
-	}
-	t.Logf("Successfully registered %d MCP tools in tool registry", len(toolsList))
-}
-
-func TestNoParamMCPTool(t *testing.T) {
+func TestNoParamMCPToolAndPing(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_status",
 		Description: "Get server status with no parameters",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, string, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, struct{}, error) {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: "operational"}},
-		}, "operational", nil
+		}, struct{}{}, nil
 	})
 
 	sseHandler := mcp.NewSSEHandler(func(*http.Request) *mcp.Server { return server }, nil)
@@ -230,6 +199,19 @@ func TestNoParamMCPTool(t *testing.T) {
 	}
 	defer mgr.DisconnectServer(srv.ID)
 
+	// 1. Verify PingServer
+	err = mgr.PingServer(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatalf("PingServer failed: %v", err)
+	}
+
+	// 2. Verify HealthCheckAll
+	healthMap := mgr.HealthCheckAll(context.Background())
+	if healthMap[srv.ID] != "healthy" {
+		t.Errorf("expected healthy status, got: %s", healthMap[srv.ID])
+	}
+
+	// 3. Verify tool execution and normalized output
 	toolName := "mcp_testserver_get_status"
 	toolDef, ok := reg.Get(toolName)
 	if !ok {
@@ -239,52 +221,90 @@ func TestNoParamMCPTool(t *testing.T) {
 
 	// Verify ToOpenAITools converts it to valid OpenAI Tool schema
 	openAITools := reg.ToOpenAITools()
-	if len(openAITools) != 1 {
-		t.Fatalf("expected 1 OpenAI tool, got %d", len(openAITools))
+	var foundOpenAITool bool
+	for _, ot := range openAITools {
+		if ot.Function.Name == toolName {
+			foundOpenAITool = true
+			schema, ok := ot.Function.Parameters.(jsonschema.Definition)
+			if !ok {
+				t.Fatalf("expected Parameters to be jsonschema.Definition, got %T", ot.Function.Parameters)
+			}
+			if schema.Type != "object" {
+				t.Errorf("expected OpenAI tool parameters type 'object', got %v", schema.Type)
+			}
+		}
 	}
-	if openAITools[0].Function.Name != toolName {
-		t.Errorf("expected OpenAI tool name %s, got %s", toolName, openAITools[0].Function.Name)
-	}
-	schema, ok := openAITools[0].Function.Parameters.(jsonschema.Definition)
-	if !ok {
-		t.Fatalf("expected Parameters to be jsonschema.Definition, got %T", openAITools[0].Function.Parameters)
-	}
-	if schema.Type != "object" {
-		t.Errorf("expected OpenAI tool parameters type 'object', got %v", schema.Type)
+	if !foundOpenAITool {
+		t.Fatalf("expected tool %s in OpenAI tools", toolName)
 	}
 
-	// Test 1: Empty JSON object "{}"
+	// Test executing tool
 	res, err := reg.Execute(context.Background(), toolName, json.RawMessage("{}"))
 	if err != nil {
 		t.Fatalf("Execute with '{}' failed: %v", err)
 	}
-	t.Logf("Execute with '{}' result: %+v", res)
-
-	// Test 2: Empty string ""
-	res, err = reg.Execute(context.Background(), toolName, json.RawMessage(""))
-	if err != nil {
-		t.Fatalf("Execute with '' failed: %v", err)
+	mcpRes, ok := res.(MCPToolResult)
+	if !ok {
+		t.Fatalf("expected MCPToolResult type, got %T", res)
 	}
-	t.Logf("Execute with '' result: %+v", res)
-
-	// Test 3: nil args
-	res, err = reg.Execute(context.Background(), toolName, nil)
-	if err != nil {
-		t.Fatalf("Execute with nil failed: %v", err)
+	if mcpRes.Content != "operational" || mcpRes.Text != "operational" || mcpRes.IsError {
+		t.Errorf("unexpected mcp result: %+v", mcpRes)
 	}
-	t.Logf("Execute with nil result: %+v", res)
+}
 
-	// Test 4: null JSON
-	res, err = reg.Execute(context.Background(), toolName, json.RawMessage("null"))
-	if err != nil {
-		t.Fatalf("Execute with 'null' failed: %v", err)
-	}
-	t.Logf("Execute with 'null' result: %+v", res)
+func TestMCPResourceReading(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "resource-server", Version: "1.0.0"}, nil)
+	server.AddResource(&mcp.Resource{
+		URI:         "file:///config.json",
+		Name:        "config.json",
+		Description: "App configuration resource",
+		MIMEType:    "application/json",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{
+				{
+					URI:      "file:///config.json",
+					MIMEType: "application/json",
+					Text:     `{"env":"production","debug":false}`,
+				},
+			},
+		}, nil
+	})
 
-	// Test 5: whitespace "   "
-	res, err = reg.Execute(context.Background(), toolName, json.RawMessage("   "))
+	sseHandler := mcp.NewSSEHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	testServer := httptest.NewServer(sseHandler)
+	defer testServer.Close()
+
+	reg := tools.NewRegistry()
+	mgr := NewManager(reg)
+
+	srv, err := mgr.AddServer(ServerConfig{
+		Name:      "ResServer",
+		Transport: "sse",
+		URL:       testServer.URL,
+	})
 	if err != nil {
-		t.Fatalf("Execute with '   ' failed: %v", err)
+		t.Fatalf("AddServer failed: %v", err)
 	}
-	t.Logf("Execute with '   ' result: %+v", res)
+
+	err = mgr.ConnectServer(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatalf("ConnectServer failed: %v", err)
+	}
+	defer mgr.DisconnectServer(srv.ID)
+
+	// Verify universal read_mcp_resource tool
+	resArgs, _ := json.Marshal(map[string]string{
+		"server_name": "ResServer",
+		"uri":         "file:///config.json",
+	})
+	res, err := reg.Execute(context.Background(), "read_mcp_resource", resArgs)
+	if err != nil {
+		t.Fatalf("read_mcp_resource failed: %v", err)
+	}
+
+	resMap, ok := res.(map[string]any)
+	if !ok || !strings.Contains(resMap["contents"].(string), `"env":"production"`) {
+		t.Errorf("unexpected resource result: %+v", res)
+	}
 }

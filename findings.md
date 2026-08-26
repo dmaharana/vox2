@@ -100,3 +100,44 @@
    - Implement multi-edit validation (uniqueness, overlap detection, non-empty).
    - Implement diff and unified patch generation in Go.
    - Register in tool registry.
+
+## MCP Robustness & Best Practices Review
+
+### Identified Gaps in Current Go-Harness MCP Manager:
+1. **Connection Lifecycle & Bounded Contexts**:
+   - `ConnectServer` used an unbounded `sessionCtx := context.Background()` for `mcpClient.Connect`, risking indefinite hangs if a Stdio subprocess or remote SSE connection stalls during handshake.
+2. **Resilience & Auto-Reconnect**:
+   - If an MCP server restarts or drops its transport (broken pipe / EOF), subsequent tool calls fail permanently until manually reconnected via UI.
+   - Missing Ping/HealthCheck capability to monitor server liveness.
+3. **Tool Result Serialization**:
+   - `session.CallTool` returns raw `[]mcp.Content` interfaces (`*mcp.TextContent`, `*mcp.ImageContent`, `*mcp.EmbeddedResource`).
+   - LLMs receive better, clearer responses when text, images, and resources are extracted into a clean, normalized structure or text string.
+4. **Environment & Stdio Process Management**:
+   - Stdio commands did not expand environment variables (`$HOME`, etc.) or allow working directory configuration.
+   - Needed clean termination guarantees during disconnects.
+5. **Resource Discovery (`read_mcp_resource`)**:
+   - Servers expose valuable resources (files, schema, live DB tables), but no tool was registered in the tool registry allowing the LLM to read MCP resources dynamically.
+6. **Per-Tool Execution Timeouts**:
+   - Remote MCP calls should have a sensible default timeout (e.g. 60s) so a hung server does not block the orchestrator indefinitely.
+
+### Target MCP Enhancements:
+1. **Bounded Connection Handshake**:
+   - Use configurable connection timeout (default 30s) derived from parent context.
+2. **Auto-Reconnect on Transient Tool Call Failures**:
+   - If a tool call fails with network/pipe/session error and `srv.Enabled == true`, attempt automatic transparent reconnect and retry the tool call once.
+3. **Live Health Checks (`PingServer` & `HealthCheckAll`)**:
+   - `session.Ping(ctx)` support to actively verify and report server health status (`connected`, `error`, `disconnected`).
+4. **Clean Tool Result Normalization**:
+   - Extract text content, image data (MIME + base64), and resource references into structured output:
+     ```json
+     {
+       "content": "...",
+       "text": "...",
+       "images": [...],
+       "is_error": false
+     }
+     ```
+5. **Dynamic Resource Tool (`read_mcp_resource`)**:
+   - Register a `read_mcp_resource` tool into the agent tool registry when servers with resources are connected.
+6. **Stdio Process Safety & Environment Expansion**:
+   - Expand environment variables in command arguments.
