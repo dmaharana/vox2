@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/sashabaranov/go-openai/jsonschema"
 	"go-harness/pkg/tools"
 )
 
@@ -193,4 +195,96 @@ func TestConnectManagerLocal(t *testing.T) {
 		t.Fatalf("Expected discovered tools from local MCP server, got 0")
 	}
 	t.Logf("Successfully registered %d MCP tools in tool registry", len(toolsList))
+}
+
+func TestNoParamMCPTool(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_status",
+		Description: "Get server status with no parameters",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, string, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "operational"}},
+		}, "operational", nil
+	})
+
+	sseHandler := mcp.NewSSEHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	testServer := httptest.NewServer(sseHandler)
+	defer testServer.Close()
+
+	reg := tools.NewRegistry()
+	mgr := NewManager(reg)
+
+	srv, err := mgr.AddServer(ServerConfig{
+		Name:      "TestServer",
+		Transport: "sse",
+		URL:       testServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("AddServer failed: %v", err)
+	}
+
+	err = mgr.ConnectServer(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatalf("ConnectServer failed: %v", err)
+	}
+	defer mgr.DisconnectServer(srv.ID)
+
+	toolName := "mcp_testserver_get_status"
+	toolDef, ok := reg.Get(toolName)
+	if !ok {
+		t.Fatalf("tool %s not registered", toolName)
+	}
+	t.Logf("Registered tool schema: %+v", toolDef.Parameters)
+
+	// Verify ToOpenAITools converts it to valid OpenAI Tool schema
+	openAITools := reg.ToOpenAITools()
+	if len(openAITools) != 1 {
+		t.Fatalf("expected 1 OpenAI tool, got %d", len(openAITools))
+	}
+	if openAITools[0].Function.Name != toolName {
+		t.Errorf("expected OpenAI tool name %s, got %s", toolName, openAITools[0].Function.Name)
+	}
+	schema, ok := openAITools[0].Function.Parameters.(jsonschema.Definition)
+	if !ok {
+		t.Fatalf("expected Parameters to be jsonschema.Definition, got %T", openAITools[0].Function.Parameters)
+	}
+	if schema.Type != "object" {
+		t.Errorf("expected OpenAI tool parameters type 'object', got %v", schema.Type)
+	}
+
+	// Test 1: Empty JSON object "{}"
+	res, err := reg.Execute(context.Background(), toolName, json.RawMessage("{}"))
+	if err != nil {
+		t.Fatalf("Execute with '{}' failed: %v", err)
+	}
+	t.Logf("Execute with '{}' result: %+v", res)
+
+	// Test 2: Empty string ""
+	res, err = reg.Execute(context.Background(), toolName, json.RawMessage(""))
+	if err != nil {
+		t.Fatalf("Execute with '' failed: %v", err)
+	}
+	t.Logf("Execute with '' result: %+v", res)
+
+	// Test 3: nil args
+	res, err = reg.Execute(context.Background(), toolName, nil)
+	if err != nil {
+		t.Fatalf("Execute with nil failed: %v", err)
+	}
+	t.Logf("Execute with nil result: %+v", res)
+
+	// Test 4: null JSON
+	res, err = reg.Execute(context.Background(), toolName, json.RawMessage("null"))
+	if err != nil {
+		t.Fatalf("Execute with 'null' failed: %v", err)
+	}
+	t.Logf("Execute with 'null' result: %+v", res)
+
+	// Test 5: whitespace "   "
+	res, err = reg.Execute(context.Background(), toolName, json.RawMessage("   "))
+	if err != nil {
+		t.Fatalf("Execute with '   ' failed: %v", err)
+	}
+	t.Logf("Execute with '   ' result: %+v", res)
 }

@@ -126,12 +126,19 @@ func (r *Registry) ToOpenAITools() []openai.Tool {
 		if !t.Enabled {
 			continue
 		}
+		params := t.Parameters
+		if params.Type == "" {
+			params.Type = jsonschema.Object
+		}
+		if params.Properties == nil {
+			params.Properties = make(map[string]jsonschema.Definition)
+		}
 		result = append(result, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  t.Parameters,
+				Parameters:  params,
 			},
 		})
 	}

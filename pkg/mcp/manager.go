@@ -277,9 +277,7 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 		Version: "1.0.0",
 	}, nil)
 
-	initCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
+	sessionCtx := context.Background()
 	var session *mcp.ClientSession
 	var err error
 	transportType := strings.ToLower(srv.Transport)
@@ -298,7 +296,7 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 		}
 
 		transport := &mcp.CommandTransport{Command: cmd}
-		session, err = mcpClient.Connect(initCtx, transport, nil)
+		session, err = mcpClient.Connect(sessionCtx, transport, nil)
 	} else if transportType == "sse" || transportType == "http" || transportType == "streamable" {
 		if srv.URL == "" {
 			return fmt.Errorf("url is required for http/sse transport")
@@ -329,7 +327,7 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 					TokenURL:     tokenURL,
 					Scopes:       scopes,
 				}
-				ts := ccConfig.TokenSource(initCtx)
+				ts := ccConfig.TokenSource(sessionCtx)
 				baseTransport = &oauth2.Transport{
 					Source: ts,
 					Base:   http.DefaultTransport,
@@ -365,7 +363,7 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 			DisableStandaloneSSE: true,
 		}
 
-		session, err = mcpClient.Connect(initCtx, streamableTransport, nil)
+		session, err = mcpClient.Connect(sessionCtx, streamableTransport, nil)
 		if err != nil {
 			log.Debug().Err(err).Str("server", srv.Name).Msg("Streamable HTTP connect failed, trying SSE transport fallback")
 			// Fallback to legacy SSEClientTransport
@@ -373,7 +371,7 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 				Endpoint:   srv.URL,
 				HTTPClient: httpClient,
 			}
-			session, err = mcpClient.Connect(initCtx, sseTransport, nil)
+			session, err = mcpClient.Connect(sessionCtx, sseTransport, nil)
 		}
 	} else {
 		return fmt.Errorf("unsupported transport: %s", srv.Transport)
@@ -383,6 +381,9 @@ func (m *Manager) ConnectServer(ctx context.Context, id string) error {
 		m.setServerError(id, err)
 		return fmt.Errorf("failed to connect to official MCP server '%s': %w", srv.Name, err)
 	}
+
+	initCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 
 	// Discover Tools
 	toolsRes, err := session.ListTools(initCtx, nil)
@@ -523,6 +524,13 @@ func (m *Manager) syncToolsToRegistry(serverID, serverName string, discoveredToo
 			schema = jsonschema.Definition{Type: jsonschema.Object}
 		}
 
+		if schema.Type == "" {
+			schema.Type = jsonschema.Object
+		}
+		if schema.Properties == nil {
+			schema.Properties = make(map[string]jsonschema.Definition)
+		}
+
 		m.toolsRegistry.Register(tools.ToolDefinition{
 			Name:        toolName,
 			Description: fmt.Sprintf("[%s] %s", serverName, tool.Description),
@@ -531,8 +539,12 @@ func (m *Manager) syncToolsToRegistry(serverID, serverName string, discoveredToo
 			Parameters:  schema,
 			Handler: func(ctx context.Context, args json.RawMessage) (any, error) {
 				var params map[string]any
-				if len(args) > 0 && string(args) != "{}" {
+				trimmed := strings.TrimSpace(string(args))
+				if len(trimmed) > 0 && trimmed != "{}" && trimmed != "null" {
 					_ = json.Unmarshal(args, &params)
+				}
+				if params == nil {
+					params = make(map[string]any)
 				}
 
 				callCtx, span := tracing.StartSpan(ctx, "mcp.call_tool."+toolName)
