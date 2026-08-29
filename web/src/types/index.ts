@@ -94,6 +94,7 @@ export interface ChatMessage {
 }
 
 export interface Settings {
+  llm_provider?: string
   llm_base_url: string
   llm_model: string
   has_api_key: boolean
@@ -104,6 +105,10 @@ export interface Settings {
   llm_oauth_scopes?: string
   llm_temperature: number
   llm_max_tokens: number
+  copilot_binary?: string
+  copilot_timeout?: number
+  copilot_installed?: boolean
+  copilot_path?: string
   log_level: string
   log_format: string
   skills_dir: string

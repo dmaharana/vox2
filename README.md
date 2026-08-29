@@ -46,10 +46,10 @@ Building robust AI agents requires more than basic LLM API wrappers. Agents need
 
 ## Features
 
-- **OpenAI-Compatible LLM Orchestration:**
-  - Configurable endpoint URL, model, temperature, max tokens, and API key at runtime.
-  - Native compatibility with **OpenAI**, **Ollama**, **vLLM**, **LMStudio**, **LocalAI**, and **OpenRouter**.
-  - Multi-turn execution loop with tool invocation, error recovery, and context cancellation.
+- **LLM Providers (OpenAI-Compatible & GitHub Copilot CLI):**
+  - **OpenAI-Compatible:** Native compatibility with **OpenAI**, **Ollama**, **vLLM**, **LMStudio**, **LocalAI**, **Google Vertex AI** (OAuth2 auto-refresh), and **OpenRouter**.
+  - **GitHub Copilot CLI:** First-class integration with the official `copilot` CLI binary. Supports non-interactive streaming completions, automatic token usage extraction, and diagnostic auth verification.
+  - Multi-turn execution loop with tool invocation, memory injection, error recovery, and context cancellation.
 
 - **Official Model Context Protocol (MCP) Integration:**
   - Built with the official `github.com/modelcontextprotocol/go-sdk`.
@@ -249,26 +249,75 @@ OTEL_ENDPOINT=localhost:4317
 
 ---
 
+## GitHub Copilot CLI Provider
+
+Go Agent Harness includes first-class support for the official **GitHub Copilot CLI** as an LLM provider.
+
+### Prerequisites:
+1. An active GitHub Copilot subscription.
+2. The official GitHub Copilot CLI binary installed on `$PATH` (`copilot`).
+   ```bash
+   # Install via npm or GitHub CLI
+   npm install -g @github/copilot-cli
+   ```
+3. Authenticate with GitHub Copilot:
+   ```bash
+   copilot login
+   # Or set your token:
+   export COPILOT_GITHUB_TOKEN="ghp_..." # or GH_TOKEN / GITHUB_TOKEN
+   ```
+
+### Selecting GitHub Copilot:
+
+#### Via CLI Flags:
+```bash
+./go-harness --provider copilot --model gpt-4o
+# Or use the --backend alias
+./go-harness --backend copilot
+```
+
+#### Via Environment Variables (`.env`):
+```env
+LLM_PROVIDER=copilot
+LLM_MODEL=gpt-4o
+COPILOT_BINARY=copilot
+COPILOT_TIMEOUT=120
+```
+
+#### Via Web UI:
+Open the **Settings** modal in the UI and select **GitHub Copilot (CLI)**. The interface will display the detected binary path, installation status, and model configuration.
+
+### Architectural Notes & Best Practices:
+- **Clean Execution Mode:** Go Agent Harness automatically executes Copilot CLI in clean prompt mode (`--no-custom-instructions`, `--available-tools ""`) so the model only operates on the harness's prompt context, skills, and tools.
+- **Latency Expectation:** The Copilot CLI functions as an agent and typically incurs higher latency (~10–40s per turn). The harness handles this with configurable execution timeouts (default 120s) and streaming token deltas.
+- **Observability:** Token metrics (`prompt_tokens`, `completion_tokens`) and duration are automatically extracted and recorded into OpenTelemetry trace spans.
+
+---
+
 ## Configuration Reference
 
-Set these in `.env` or as environment variables:
+Set these in `.env`, via CLI flags, or through the web Settings modal:
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `PORT` | `8080` | HTTP and WebSocket server port |
-| `HOST` | `0.0.0.0` | Bind host address |
-| `LOG_LEVEL` | `info` | Logging level (`debug`, `info`, `warn`, `error`) |
-| `LOG_FORMAT` | `console` | Log format (`console` pretty colorized, or `json`) |
-| `SKILLS_DIR` | `./skills` | Directory containing dynamic skill folders |
-| `DB_PATH` | `./data/harness.db` | Local SQLite database file path |
-| `OTEL_EXPORTER` | `console` | Trace exporter (`console`, `file`, `otlp`, `all`, `none`) |
-| `OTEL_ENDPOINT` | `localhost:4317` | Remote OTLP gRPC endpoint |
-| `TRACE_FILE` | `./logs/traces.json` | Local file path for exported JSON traces |
-| `LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint URL |
-| `LLM_MODEL` | `gpt-4o` | LLM model identifier |
-| `LLM_API_KEY` | `""` | Optional API key |
-| `LLM_TEMPERATURE`| `0.7` | Sampling temperature (`0.0` to `1.5`) |
-| `LLMMaxTokens` | `4096` | Maximum generation tokens |
+| Variable | CLI Flag | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `LLM_PROVIDER` | `--provider`, `--backend` | `openai` | LLM backend: `openai`, `copilot` |
+| `LLM_MODEL` | `--model` | `gpt-4o` | Model identifier (e.g. `gpt-4o`, `claude-3.5-sonnet`) |
+| `COPILOT_BINARY` | `--copilot-binary` | `copilot` | Path or name of Copilot CLI binary |
+| `COPILOT_TIMEOUT`| `--copilot-timeout`| `120` | Request timeout in seconds for Copilot CLI |
+| `PORT` | `--port` | `8080` | HTTP and WebSocket server port |
+| `HOST` | `--host` | `0.0.0.0` | Bind host address |
+| `LOG_LEVEL` | `--log-level` | `info` | Logging level (`debug`, `info`, `warn`, `error`) |
+| `LOG_FORMAT` | | `console` | Log format (`console` pretty colorized, or `json`) |
+| `SKILLS_DIR` | | `./skills` | Directory containing dynamic skill folders |
+| `DB_PATH` | | `./data/harness.db` | Local SQLite database file path |
+| `OTEL_EXPORTER` | | `console` | Trace exporter (`console`, `file`, `otlp`, `all`, `none`) |
+| `OTEL_ENDPOINT` | | `localhost:4317` | Remote OTLP gRPC endpoint |
+| `TRACE_FILE` | | `./logs/traces.json` | Local file path for exported JSON traces |
+| `LLM_BASE_URL` | | `https://api.openai.com/v1` | OpenAI-compatible endpoint URL |
+| `LLM_API_KEY` | | `""` | Optional API key (encrypted with AES-256 in DB) |
+| `LLM_AUTH_TYPE` | | `api_key` | Auth type (`api_key`, `oauth2`) |
+| `LLM_TEMPERATURE`| | `0.7` | Sampling temperature (`0.0` to `1.5`) |
+| `LLM_MAX_TOKENS` | | `4096` | Maximum generation tokens |
 
 ---
 
