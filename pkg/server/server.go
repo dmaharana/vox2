@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"time"
 
@@ -152,6 +153,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // SettingsResponse returns sanitized settings to the frontend.
 type SettingsResponse struct {
+	LLMProvider          string  `json:"llm_provider"`
 	LLMBaseURL           string  `json:"llm_base_url"`
 	LLMModel             string  `json:"llm_model"`
 	HasAPIKey            bool    `json:"has_api_key"`
@@ -162,6 +164,10 @@ type SettingsResponse struct {
 	LLMOAuthScopes       string  `json:"llm_oauth_scopes"`
 	LLMTemperature       float64 `json:"llm_temperature"`
 	LLMMaxTokens         int     `json:"llm_max_tokens"`
+	CopilotBinary        string  `json:"copilot_binary"`
+	CopilotTimeout       int     `json:"copilot_timeout"`
+	CopilotInstalled     bool    `json:"copilot_installed"`
+	CopilotPath          string  `json:"copilot_path"`
 	LogLevel             string  `json:"log_level"`
 	LogFormat            string  `json:"log_format"`
 	SkillsDir            string  `json:"skills_dir"`
@@ -171,7 +177,25 @@ type SettingsResponse struct {
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	current := s.cfg.Clone()
+	copilotBin := current.CopilotBinary
+	if copilotBin == "" {
+		copilotBin = "copilot"
+	}
+
+	copilotInstalled := false
+	copilotPath := ""
+	if p, err := exec.LookPath(copilotBin); err == nil {
+		copilotInstalled = true
+		copilotPath = p
+	}
+
+	provider := current.LLMProvider
+	if provider == "" {
+		provider = "openai"
+	}
+
 	resp := SettingsResponse{
+		LLMProvider:          provider,
 		LLMBaseURL:           current.LLMBaseURL,
 		LLMModel:             current.LLMModel,
 		HasAPIKey:            current.LLMAPIKey != "",
@@ -182,6 +206,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		LLMOAuthScopes:       current.LLMOAuthScopes,
 		LLMTemperature:       current.LLMTemperature,
 		LLMMaxTokens:         current.LLMMaxTokens,
+		CopilotBinary:        copilotBin,
+		CopilotTimeout:       current.CopilotTimeout,
+		CopilotInstalled:     copilotInstalled,
+		CopilotPath:          copilotPath,
 		LogLevel:             current.LogLevel,
 		LogFormat:            current.LogFormat,
 		SkillsDir:            current.SkillsDir,
@@ -194,6 +222,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateSettingsRequest struct {
+	LLMProvider          *string  `json:"llm_provider,omitempty"`
 	LLMBaseURL           *string  `json:"llm_base_url,omitempty"`
 	LLMModel             *string  `json:"llm_model,omitempty"`
 	LLMAPIKey            *string  `json:"llm_api_key,omitempty"`
@@ -204,6 +233,8 @@ type UpdateSettingsRequest struct {
 	LLMOAuthScopes       *string  `json:"llm_oauth_scopes,omitempty"`
 	LLMTemperature       *float64 `json:"llm_temperature,omitempty"`
 	LLMMaxTokens         *int     `json:"llm_max_tokens,omitempty"`
+	CopilotBinary        *string  `json:"copilot_binary,omitempty"`
+	CopilotTimeout       *int     `json:"copilot_timeout,omitempty"`
 	LogLevel             *string  `json:"log_level,omitempty"`
 	SkillsDir            *string  `json:"skills_dir,omitempty"`
 }
@@ -216,6 +247,9 @@ func (s *Server) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	current := s.cfg.Clone()
+	if req.LLMProvider != nil {
+		current.LLMProvider = *req.LLMProvider
+	}
 	if req.LLMBaseURL != nil {
 		current.LLMBaseURL = *req.LLMBaseURL
 	}
@@ -245,6 +279,12 @@ func (s *Server) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.LLMMaxTokens != nil {
 		current.LLMMaxTokens = *req.LLMMaxTokens
+	}
+	if req.CopilotBinary != nil {
+		current.CopilotBinary = *req.CopilotBinary
+	}
+	if req.CopilotTimeout != nil {
+		current.CopilotTimeout = *req.CopilotTimeout
 	}
 	if req.LogLevel != nil {
 		current.LogLevel = *req.LogLevel

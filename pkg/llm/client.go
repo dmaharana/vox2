@@ -17,10 +17,18 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 )
 
-// Client wraps sashabaranov/go-openai client with configuration, OAuth2 auto-refresh, and tracing.
+// ChatStream defines the streaming interface for chat completions across providers.
+type ChatStream interface {
+	Recv() (openai.ChatCompletionStreamResponse, error)
+	Close() error
+}
+
+// Client wraps sashabaranov/go-openai client and Copilot CLI client with configuration, OAuth2 auto-refresh, and tracing.
 type Client struct {
 	mu                sync.RWMutex
 	cfg               *config.Config
+	provider          string
+	copilot           *CopilotClient
 	openAI            *openai.Client
 	baseURL           string
 	model             string
@@ -34,10 +42,11 @@ type Client struct {
 	maxTokens         int
 }
 
-// NewClient creates a new OpenAI-compatible LLM client.
+// NewClient creates a new LLM client.
 func NewClient(cfg *config.Config) *Client {
 	c := &Client{
-		cfg: cfg,
+		cfg:     cfg,
+		copilot: NewCopilotClient(cfg),
 	}
 	c.refresh()
 	return c
@@ -49,6 +58,7 @@ func (c *Client) refresh() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.provider = snap.LLMProvider
 	c.baseURL = snap.LLMBaseURL
 	c.model = snap.LLMModel
 	c.apiKey = snap.LLMAPIKey
@@ -118,9 +128,25 @@ func (c *Client) refresh() {
 	c.openAI = openai.NewClientWithConfig(clientCfg)
 }
 
+// IsCopilotProvider checks if the active provider is GitHub Copilot CLI.
+func (c *Client) IsCopilotProvider() bool {
+	snap := c.cfg.Clone()
+	p := strings.ToLower(strings.TrimSpace(snap.LLMProvider))
+	return p == "copilot" || p == "github-copilot" || p == "copilot-cli"
+}
+
+// GetCopilotClient returns the Copilot CLI client.
+func (c *Client) GetCopilotClient() *CopilotClient {
+	return c.copilot
+}
+
 // StreamChat sends a chat completion request and returns a streaming response.
-func (c *Client) StreamChat(ctx context.Context, messages []openai.ChatCompletionMessage, tools []openai.Tool) (*openai.ChatCompletionStream, error) {
+func (c *Client) StreamChat(ctx context.Context, messages []openai.ChatCompletionMessage, tools []openai.Tool) (ChatStream, error) {
 	c.refresh()
+
+	if c.IsCopilotProvider() {
+		return c.copilot.StreamChat(ctx, messages, tools)
+	}
 
 	c.mu.RLock()
 	model := c.model
@@ -159,7 +185,7 @@ type StreamDelta struct {
 }
 
 // ReadStreamChunk reads and accumulates tool calls from a streaming delta.
-func ReadStreamChunk(stream *openai.ChatCompletionStream, toolCallMap map[int]*openai.ToolCall) (StreamDelta, error) {
+func ReadStreamChunk(stream ChatStream, toolCallMap map[int]*openai.ToolCall) (StreamDelta, error) {
 	resp, err := stream.Recv()
 	if err != nil {
 		if errors.Is(err, io.EOF) {

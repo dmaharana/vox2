@@ -170,3 +170,90 @@ func TestConfigDBSaveAndLoadEncryption(t *testing.T) {
 		t.Errorf("Expected token URL 'https://oauth2.googleapis.com/token', got '%s'", cfgLoaded.LLMOAuthTokenURL)
 	}
 }
+
+func TestConfigCopilotFlags(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	args := []string{
+		"--provider", "copilot",
+		"--model", "gpt-5-mini",
+		"--port", "8888",
+		"--host", "127.0.0.1",
+		"--log-level", "warn",
+		"--copilot-binary", "/custom/bin/copilot",
+		"--copilot-timeout", "90",
+	}
+
+	if err := cfg.ParseFlags(args); err != nil {
+		t.Fatalf("ParseFlags failed: %v", err)
+	}
+
+	if cfg.LLMProvider != "copilot" {
+		t.Errorf("expected provider copilot, got %s", cfg.LLMProvider)
+	}
+	if cfg.LLMModel != "gpt-5-mini" {
+		t.Errorf("expected model gpt-5-mini, got %s", cfg.LLMModel)
+	}
+	if cfg.Port != 8888 {
+		t.Errorf("expected port 8888, got %d", cfg.Port)
+	}
+	if cfg.Host != "127.0.0.1" {
+		t.Errorf("expected host 127.0.0.1, got %s", cfg.Host)
+	}
+	if cfg.LogLevel != "warn" {
+		t.Errorf("expected log_level warn, got %s", cfg.LogLevel)
+	}
+	if cfg.CopilotBinary != "/custom/bin/copilot" {
+		t.Errorf("expected copilot binary /custom/bin/copilot, got %s", cfg.CopilotBinary)
+	}
+	if cfg.CopilotTimeout != 90 {
+		t.Errorf("expected copilot timeout 90, got %d", cfg.CopilotTimeout)
+	}
+}
+
+func TestConfigCopilotDBSaveAndLoad(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cfg-copilot-db-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	dbPath := filepath.Join(tempDir, "copilot_cfg_test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	cfg, _ := Load()
+	cfg.LLMProvider = "copilot"
+	cfg.LLMModel = "claude-3.5-sonnet"
+	cfg.CopilotBinary = "/usr/local/bin/copilot"
+	cfg.CopilotTimeout = 180
+
+	if err := cfg.SaveToDB(database); err != nil {
+		t.Fatalf("SaveToDB failed: %v", err)
+	}
+
+	cfgLoaded, _ := Load()
+	if err := cfgLoaded.LoadFromDB(database); err != nil {
+		t.Fatalf("LoadFromDB failed: %v", err)
+	}
+
+	if cfgLoaded.LLMProvider != "copilot" {
+		t.Errorf("expected LLMProvider 'copilot', got '%s'", cfgLoaded.LLMProvider)
+	}
+	if cfgLoaded.LLMModel != "claude-3.5-sonnet" {
+		t.Errorf("expected LLMModel 'claude-3.5-sonnet', got '%s'", cfgLoaded.LLMModel)
+	}
+	if cfgLoaded.CopilotBinary != "/usr/local/bin/copilot" {
+		t.Errorf("expected CopilotBinary '/usr/local/bin/copilot', got '%s'", cfgLoaded.CopilotBinary)
+	}
+	if cfgLoaded.CopilotTimeout != 180 {
+		t.Errorf("expected CopilotTimeout 180, got %d", cfgLoaded.CopilotTimeout)
+	}
+}
+

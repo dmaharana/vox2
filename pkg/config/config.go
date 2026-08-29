@@ -1,6 +1,7 @@
 package config
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,16 +32,19 @@ type Config struct {
 	OTelEndpoint string `json:"otel_endpoint"`
 
 	// LLM
-	LLMBaseURL          string  `json:"llm_base_url"`
-	LLMModel            string  `json:"llm_model"`
-	LLMAPIKey           string  `json:"llm_api_key"`
-	LLMAuthType         string  `json:"llm_auth_type"` // "api_key" or "oauth2"
+	LLMProvider          string  `json:"llm_provider"` // "openai", "copilot", "github-copilot", "copilot-cli"
+	LLMBaseURL           string  `json:"llm_base_url"`
+	LLMModel             string  `json:"llm_model"`
+	LLMAPIKey            string  `json:"llm_api_key"`
+	LLMAuthType          string  `json:"llm_auth_type"` // "api_key" or "oauth2"
 	LLMOAuthClientID     string  `json:"llm_oauth_client_id"`
 	LLMOAuthClientSecret string  `json:"llm_oauth_client_secret"`
 	LLMOAuthTokenURL     string  `json:"llm_oauth_token_url"`
 	LLMOAuthScopes       string  `json:"llm_oauth_scopes"`
-	LLMTemperature      float64 `json:"llm_temperature"`
-	LLMMaxTokens        int     `json:"llm_max_tokens"`
+	LLMTemperature       float64 `json:"llm_temperature"`
+	LLMMaxTokens         int     `json:"llm_max_tokens"`
+	CopilotBinary        string  `json:"copilot_binary"`
+	CopilotTimeout       int     `json:"copilot_timeout"`
 }
 
 // Load loads configuration from optional .env file and environment variables with sensible defaults.
@@ -61,6 +65,7 @@ func Load(envPath ...string) (*Config, error) {
 		TraceFile:            getEnv("TRACE_FILE", "./logs/traces.json"),
 		OTelExporter:         getEnv("OTEL_EXPORTER", "console"),
 		OTelEndpoint:         getEnv("OTEL_ENDPOINT", "localhost:4317"),
+		LLMProvider:          getEnv("LLM_PROVIDER", "openai"),
 		LLMBaseURL:           getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
 		LLMModel:             getEnv("LLM_MODEL", "gpt-4o"),
 		LLMAPIKey:            getEnv("LLM_API_KEY", ""),
@@ -71,6 +76,8 @@ func Load(envPath ...string) (*Config, error) {
 		LLMOAuthScopes:       getEnv("LLM_OAUTH_SCOPES", ""),
 		LLMTemperature:       getEnvFloat("LLM_TEMPERATURE", 0.7),
 		LLMMaxTokens:         getEnvInt("LLM_MAX_TOKENS", 4096),
+		CopilotBinary:        getEnv("COPILOT_BINARY", "copilot"),
+		CopilotTimeout:       getEnvInt("COPILOT_TIMEOUT", 120),
 	}
 
 	// Ensure directories for db and traces exist
@@ -98,6 +105,7 @@ func (c *Config) Clone() Config {
 		TraceFile:            c.TraceFile,
 		OTelExporter:         c.OTelExporter,
 		OTelEndpoint:         c.OTelEndpoint,
+		LLMProvider:          c.LLMProvider,
 		LLMBaseURL:           c.LLMBaseURL,
 		LLMModel:             c.LLMModel,
 		LLMAPIKey:            c.LLMAPIKey,
@@ -108,6 +116,8 @@ func (c *Config) Clone() Config {
 		LLMOAuthScopes:       c.LLMOAuthScopes,
 		LLMTemperature:       c.LLMTemperature,
 		LLMMaxTokens:         c.LLMMaxTokens,
+		CopilotBinary:        c.CopilotBinary,
+		CopilotTimeout:       c.CopilotTimeout,
 	}
 }
 
@@ -121,6 +131,9 @@ func (c *Config) Update(newCfg Config) {
 	}
 	if newCfg.SkillsDir != "" {
 		c.SkillsDir = newCfg.SkillsDir
+	}
+	if newCfg.LLMProvider != "" {
+		c.LLMProvider = newCfg.LLMProvider
 	}
 	if newCfg.LLMBaseURL != "" {
 		c.LLMBaseURL = newCfg.LLMBaseURL
@@ -152,6 +165,12 @@ func (c *Config) Update(newCfg Config) {
 	if newCfg.LLMMaxTokens > 0 {
 		c.LLMMaxTokens = newCfg.LLMMaxTokens
 	}
+	if newCfg.CopilotBinary != "" {
+		c.CopilotBinary = newCfg.CopilotBinary
+	}
+	if newCfg.CopilotTimeout > 0 {
+		c.CopilotTimeout = newCfg.CopilotTimeout
+	}
 }
 
 func getEnv(key, defaultVal string) string {
@@ -177,4 +196,54 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 		}
 	}
 	return defaultVal
+}
+
+// ParseFlags parses command-line flags and updates the Config.
+func (c *Config) ParseFlags(args []string) error {
+	fs := flag.NewFlagSet("go-harness", flag.ContinueOnError)
+
+	var (
+		provider       = fs.String("provider", "", "LLM provider: openai, copilot")
+		backend        = fs.String("backend", "", "Alias for --provider")
+		model          = fs.String("model", "", "LLM model name")
+		port           = fs.Int("port", 0, "Server HTTP port")
+		host           = fs.String("host", "", "Server host interface")
+		logLevel       = fs.String("log-level", "", "Log level: debug, info, warn, error")
+		copilotBin     = fs.String("copilot-binary", "", "Path to GitHub Copilot CLI binary")
+		copilotTimeout = fs.Int("copilot-timeout", 0, "Timeout in seconds for Copilot CLI requests")
+	)
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if *backend != "" && *provider == "" {
+		*provider = *backend
+	}
+	if *provider != "" {
+		c.LLMProvider = *provider
+	}
+	if *model != "" {
+		c.LLMModel = *model
+	}
+	if *port > 0 {
+		c.Port = *port
+	}
+	if *host != "" {
+		c.Host = *host
+	}
+	if *logLevel != "" {
+		c.LogLevel = *logLevel
+	}
+	if *copilotBin != "" {
+		c.CopilotBinary = *copilotBin
+	}
+	if *copilotTimeout > 0 {
+		c.CopilotTimeout = *copilotTimeout
+	}
+
+	return nil
 }

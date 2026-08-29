@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
+	"flag"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,9 +41,62 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Parse command-line flags (takes precedence over env / .env)
+	if err := cfg.ParseFlags(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
+
 	// 2. Initialize Zerolog Logger
 	logger.Init(cfg.LogLevel, cfg.LogFormat)
 	log.Info().Msg("Starting Go Agent Harness...")
+
+	// Status feedback for selected LLM Provider
+	snap := cfg.Clone()
+	isCopilot := strings.EqualFold(snap.LLMProvider, "copilot") ||
+		strings.EqualFold(snap.LLMProvider, "github-copilot") ||
+		strings.EqualFold(snap.LLMProvider, "copilot-cli")
+
+	if isCopilot {
+		copilotBin := snap.CopilotBinary
+		if copilotBin == "" {
+			copilotBin = "copilot"
+		}
+		copilotPath, err := exec.LookPath(copilotBin)
+		if err != nil {
+			log.Warn().
+				Str("binary", copilotBin).
+				Msg("⚠️ GitHub Copilot CLI binary not found on PATH. Please install from https://github.com/github/copilot-cli or specify --copilot-binary.")
+		} else {
+			log.Info().
+				Str("provider", "GitHub Copilot (CLI)").
+				Str("binary_path", copilotPath).
+				Str("model", snap.LLMModel).
+				Msg("🤖 GitHub Copilot CLI provider active. Note: Expect higher latency per turn (~10-40s) as Copilot CLI operates as an agent.")
+
+			// Quick authentication probe
+			checkCmd := exec.Command(copilotPath, "--version")
+			if out, err := checkCmd.CombinedOutput(); err != nil {
+				log.Warn().
+					Str("output", strings.TrimSpace(string(out))).
+					Msg("⚠️ GitHub Copilot CLI authentication check failed. Run 'copilot login' or set COPILOT_GITHUB_TOKEN/GH_TOKEN.")
+			} else {
+				log.Info().
+					Str("version", strings.TrimSpace(string(out))).
+					Msg("✅ GitHub Copilot CLI verified and ready.")
+			}
+		}
+	} else {
+		log.Info().
+			Str("provider", "OpenAI-compatible").
+			Str("base_url", snap.LLMBaseURL).
+			Str("model", snap.LLMModel).
+			Str("auth_type", snap.LLMAuthType).
+			Msg("🤖 OpenAI-compatible provider active.")
+	}
 
 	// 3. Initialize OpenTelemetry Tracing
 	ctx, cancel := context.WithCancel(context.Background())
