@@ -8,7 +8,8 @@ import {
   DialogTitle,
 } from './ui/dialog'
 import { Button } from './ui/button'
-import { MessageSquare, Download, Trash2, Plus, Calendar } from 'lucide-react'
+import { Input } from './ui/input'
+import { MessageSquare, Download, Trash2, Plus, Calendar, Search, X } from 'lucide-react'
 
 interface Props {
   open: boolean
@@ -27,6 +28,7 @@ export const ConversationsDrawer: React.FC<Props> = ({
 }) => {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [loading, setLoading] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const loadList = async () => {
     setLoading(true)
@@ -41,6 +43,7 @@ export const ConversationsDrawer: React.FC<Props> = ({
   useEffect(() => {
     if (open) {
       loadList()
+      setSearchQuery('')
     }
   }, [open])
 
@@ -60,6 +63,15 @@ export const ConversationsDrawer: React.FC<Props> = ({
     window.open(getExportCSVUrl(id), '_blank')
   }
 
+  const filteredConversations = (conversations || []).filter((c) => {
+    if (!searchQuery.trim()) return true
+    const q = searchQuery.toLowerCase().trim()
+    const title = (c.title || 'Untitled Chat').toLowerCase()
+    const id = (c.id || '').toLowerCase()
+    const formattedDate = new Date(c.updated_at).toLocaleString().toLowerCase()
+    return title.includes(q) || id.includes(q) || formattedDate.includes(q)
+  })
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
@@ -78,14 +90,47 @@ export const ConversationsDrawer: React.FC<Props> = ({
           </Button>
         </DialogHeader>
 
+        {/* Search Bar */}
+        <div className="relative mt-2">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search conversations by title, ID, or date..."
+            className="pl-8 pr-8 text-xs h-9"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground cursor-pointer"
+              title="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
         <div className="space-y-2 mt-3">
           {(conversations || []).length === 0 ? (
             <div className="text-center py-10 border border-dashed rounded-lg text-sm text-muted-foreground">
               {loading ? 'Loading conversations...' : 'No saved conversations found.'}
             </div>
+          ) : filteredConversations.length === 0 ? (
+            <div className="text-center py-8 border border-dashed rounded-lg text-sm text-muted-foreground space-y-2">
+              <p>No conversations found matching "{searchQuery}"</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-primary hover:underline h-7"
+                onClick={() => setSearchQuery('')}
+              >
+                Clear search
+              </Button>
+            </div>
           ) : (
             <div className="space-y-2 max-h-[450px] overflow-y-auto pr-1">
-              {(conversations || []).map((c) => {
+              {filteredConversations.map((c) => {
                 const isSelected = c.id === currentConversationId
                 return (
                   <div
