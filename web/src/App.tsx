@@ -27,6 +27,7 @@ import {
   Wifi,
   WifiOff,
   PanelLeft,
+  ArrowDown,
 } from 'lucide-react'
 
 export function AppContent() {
@@ -60,6 +61,9 @@ export function AppContent() {
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
+  const chatContainerRef = useRef<HTMLDivElement | null>(null)
+  const [showScrollBottom, setShowScrollBottom] = useState(false)
+  const userScrolledUpRef = useRef(false)
 
   // Connect & Auto-Reconnect WebSocket
   useEffect(() => {
@@ -253,9 +257,58 @@ export function AppContent() {
     }
   }
 
-  // Scroll on message change
+  const scrollToBottom = (smooth = false) => {
+    userScrolledUpRef.current = false
+    setShowScrollBottom(false)
+    if (chatContainerRef.current) {
+      if (smooth) {
+        chatContainerRef.current.scrollTo({
+          top: chatContainerRef.current.scrollHeight,
+          behavior: 'smooth',
+        })
+      } else {
+        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+      }
+    }
+  }
+
+  const handleScroll = () => {
+    if (!chatContainerRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight
+    if (distanceFromBottom > 40) {
+      userScrolledUpRef.current = true
+      setShowScrollBottom(true)
+    } else {
+      userScrolledUpRef.current = false
+      setShowScrollBottom(false)
+    }
+  }
+
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY < 0) {
+      // User is scrolling UP - immediately stop auto-scrolling
+      userScrolledUpRef.current = true
+      setShowScrollBottom(true)
+    }
+  }
+
+  const handleTouchMove = () => {
+    if (!chatContainerRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight
+    if (distanceFromBottom > 40) {
+      userScrolledUpRef.current = true
+      setShowScrollBottom(true)
+    }
+  }
+
+  // Scroll on message change unless user has manually scrolled up
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (userScrolledUpRef.current) return
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+    }
   }, [messages, streaming])
 
   const handleSend = () => {
@@ -263,6 +316,10 @@ export function AppContent() {
 
     const userMessageText = input.trim()
     setInput('')
+
+    // Reset user scroll state to enable auto-scrolling
+    userScrolledUpRef.current = false
+    setShowScrollBottom(false)
 
     // Append user message
     const userMsg: ChatMessage = {
@@ -306,12 +363,16 @@ export function AppContent() {
     setConversationId('conv-' + Math.random().toString(36).substring(2, 9))
     setMessages([])
     setStreaming(false)
+    userScrolledUpRef.current = false
+    setShowScrollBottom(false)
   }
 
   const handleSelectConversation = async (id: string) => {
     try {
       const data = await fetchConversation(id)
       setConversationId(data.conversation.id)
+      userScrolledUpRef.current = false
+      setShowScrollBottom(false)
       const mapped: ChatMessage[] = (data.messages || []).map((m: any) => {
         let toolCalls: ToolCallState[] | undefined
         let subflows: SubflowState[] | undefined
@@ -463,43 +524,73 @@ export function AppContent() {
         </header>
 
         {/* Main Chat Stream Area */}
-        <main className="flex-1 overflow-y-auto px-4 md:px-8 py-6 max-w-4xl w-full mx-auto">
-          {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center space-y-4 py-16 text-muted-foreground">
-              <div className="relative group">
-                <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-cyan-500/30 to-purple-500/30 blur-lg opacity-75 group-hover:opacity-100 transition duration-500"></div>
-                <VoxLogo size={64} className="relative" />
+        <div className="flex-1 relative min-h-0 overflow-hidden flex flex-col">
+          <main
+            ref={chatContainerRef}
+            onScroll={handleScroll}
+            onWheel={handleWheel}
+            onTouchMove={handleTouchMove}
+            className="flex-1 overflow-y-auto px-4 md:px-8 py-6 max-w-4xl w-full mx-auto"
+          >
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center space-y-4 py-16 text-muted-foreground">
+                <div className="relative group">
+                  <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-cyan-500/30 to-purple-500/30 blur-lg opacity-75 group-hover:opacity-100 transition duration-500"></div>
+                  <VoxLogo size={64} className="relative" />
+                </div>
+                <div className="space-y-1.5">
+                  <h2 className="text-xl font-extrabold tracking-tight text-foreground flex items-center justify-center gap-1.5">
+                    Welcome to <span className="bg-gradient-to-r from-cyan-400 via-indigo-400 to-purple-500 bg-clip-text text-transparent">Vox2 Studio</span>
+                  </h2>
+                  <p className="text-xs max-w-md mx-auto text-muted-foreground">
+                    Next-generation harness for autonomous AI agents, dynamic MCP tools, cognitive memory, and parallel subflows.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 justify-center max-w-lg pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setInput('Read the files in this directory and summarize the codebase structure')}
+                    className="text-xs p-2.5 rounded-lg border bg-card/60 hover:bg-card hover:border-primary/50 transition-all text-left cursor-pointer"
+                  >
+                    📁 Read the files in this directory and summarize structure
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInput('Run a parallel flow to investigate both code review and weather')}
+                    className="text-xs p-2.5 rounded-lg border bg-card/60 hover:bg-card hover:border-primary/50 transition-all text-left cursor-pointer"
+                  >
+                    ⚡ Run a parallel flow to investigate independent tasks
+                  </button>
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <h2 className="text-xl font-extrabold tracking-tight text-foreground flex items-center justify-center gap-1.5">
-                  Welcome to <span className="bg-gradient-to-r from-cyan-400 via-indigo-400 to-purple-500 bg-clip-text text-transparent">Vox2 Studio</span>
-                </h2>
-                <p className="text-xs max-w-md mx-auto text-muted-foreground">
-                  Next-generation harness for autonomous AI agents, dynamic MCP tools, cognitive memory, and parallel subflows.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2 justify-center max-w-lg pt-3">
-                <button
-                  type="button"
-                  onClick={() => setInput('Read the files in this directory and summarize the codebase structure')}
-                  className="text-xs p-2.5 rounded-lg border bg-card/60 hover:bg-card hover:border-primary/50 transition-all text-left cursor-pointer"
-                >
-                  📁 Read the files in this directory and summarize structure
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInput('Run a parallel flow to investigate both code review and weather')}
-                  className="text-xs p-2.5 rounded-lg border bg-card/60 hover:bg-card hover:border-primary/50 transition-all text-left cursor-pointer"
-                >
-                  ⚡ Run a parallel flow to investigate independent tasks
-                </button>
-              </div>
+            ) : (
+              <ChatMessageList messages={messages} streaming={streaming} />
+            )}
+            <div ref={messagesEndRef} />
+          </main>
+
+          {/* Floating Scroll to Bottom Button */}
+          {showScrollBottom && (
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => scrollToBottom(true)}
+                className="rounded-full shadow-lg bg-background/95 backdrop-blur-md border border-border hover:bg-accent text-xs gap-1.5 h-8 px-3.5 transition-all cursor-pointer animate-in fade-in slide-in-from-bottom-2"
+              >
+                <ArrowDown className="w-3.5 h-3.5 text-primary" />
+                {streaming ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                    Resume auto-scroll
+                  </span>
+                ) : (
+                  <span>Scroll to bottom</span>
+                )}
+              </Button>
             </div>
-          ) : (
-            <ChatMessageList messages={messages} streaming={streaming} />
           )}
-          <div ref={messagesEndRef} />
-        </main>
+        </div>
 
         {/* Bottom Message Input & Disclaimer Area */}
         <footer className="border-t bg-card/50 px-4 py-3 shrink-0">
