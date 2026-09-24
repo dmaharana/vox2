@@ -146,6 +146,22 @@ func (d *DB) migrate() error {
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL
 	);
+
+	-- Cron Jobs table for persisting scheduled skills and intents
+	CREATE TABLE IF NOT EXISTS cron_jobs (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		schedule TEXT NOT NULL,
+		intent TEXT NOT NULL,
+		conversation_id TEXT NOT NULL,
+		enabled INTEGER DEFAULT 1,
+		last_run DATETIME,
+		next_run DATETIME,
+		last_status TEXT DEFAULT 'pending',
+		last_error TEXT DEFAULT '',
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	);
 	`
 
 	_, err := d.db.Exec(schema)

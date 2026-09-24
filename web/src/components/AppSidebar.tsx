@@ -23,6 +23,7 @@ import {
   WifiOff,
   Bot,
   Activity,
+  Clock,
 } from 'lucide-react'
 
 interface AppSidebarProps {
@@ -31,11 +32,13 @@ interface AppSidebarProps {
   onOpenSettings: () => void
   onOpenMcp: () => void
   onOpenTools: () => void
+  onOpenCron: () => void
   onOpenMemory: () => void
   onOpenHistory: () => void
   onNewChat: () => void
   wsConnected: boolean
   activeModal?: string | null
+  cronCount?: number
 }
 
 export const AppSidebar: React.FC<AppSidebarProps> = ({
@@ -44,11 +47,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onOpenSettings,
   onOpenMcp,
   onOpenTools,
+  onOpenCron,
   onOpenMemory,
   onOpenHistory,
   onNewChat,
   wsConnected,
   activeModal,
+  cronCount,
 }) => {
   const { theme, setTheme, isDark } = useTheme()
 
@@ -76,6 +81,14 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       icon: Wrench,
       onClick: onOpenTools,
       badge: null,
+    },
+    {
+      id: 'cron',
+      label: 'Cron Schedules',
+      description: 'Recurring Skills & Intents',
+      icon: Clock,
+      onClick: onOpenCron,
+      badge: cronCount && cronCount > 0 ? String(cronCount) : null,
     },
     {
       id: 'memory',

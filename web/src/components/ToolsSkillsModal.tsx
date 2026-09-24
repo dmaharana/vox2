@@ -12,14 +12,15 @@ import { Switch } from './ui/switch'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { Wrench, Sparkles, FolderCode, RefreshCw, FileCode, BookOpen, Search, X } from 'lucide-react'
+import { Wrench, Sparkles, FolderCode, RefreshCw, FileCode, BookOpen, Search, X, Clock } from 'lucide-react'
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
+  onScheduleSkill?: (skillName: string) => void
 }
 
-export const ToolsSkillsModal: React.FC<Props> = ({ open, onOpenChange }) => {
+export const ToolsSkillsModal: React.FC<Props> = ({ open, onOpenChange, onScheduleSkill }) => {
   const [tools, setTools] = useState<ToolDefinition[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const [skillSearch, setSkillSearch] = useState('')
@@ -212,10 +213,24 @@ export const ToolsSkillsModal: React.FC<Props> = ({ open, onOpenChange }) => {
                         </div>
                         <p className="text-xs text-muted-foreground">{s.description}</p>
                       </div>
-                      <Switch
-                        checked={s.enabled}
-                        onCheckedChange={() => handleToggleSkill(s.name, s.enabled)}
-                      />
+                      <div className="flex items-center gap-2 shrink-0">
+                        {onScheduleSkill && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => onScheduleSkill(s.name)}
+                            title={`Schedule /${s.name} in Cron`}
+                            className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                          >
+                            <Clock className="w-3.5 h-3.5 text-primary" />
+                            Schedule
+                          </Button>
+                        )}
+                        <Switch
+                          checked={s.enabled}
+                          onCheckedChange={() => handleToggleSkill(s.name, s.enabled)}
+                        />
+                      </div>
                     </div>
                   )
                 })}

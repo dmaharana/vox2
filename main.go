@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"go-harness/pkg/config"
+	"go-harness/pkg/cron"
 	"go-harness/pkg/db"
 	"go-harness/pkg/flow"
 	"go-harness/pkg/llm"
@@ -160,9 +161,21 @@ func main() {
 	// Initialize LLM Orchestrator
 	orchestrator := llm.NewOrchestrator(cfg, database, memMgr, skillsLoader, toolsReg, hub)
 
+	// Initialize Background Cron Manager
+	cronRunner := func(cCtx context.Context, job db.CronJob) error {
+		return orchestrator.ExecuteIntent(cCtx, job.ConversationID, job.Intent)
+	}
+	cronMgr := cron.NewManager(database, cronRunner)
+	orchestrator.SetCronManager(cronMgr)
+	if err := cronMgr.LoadJobs(ctx); err != nil {
+		log.Warn().Err(err).Msg("Failed to restore cron jobs from database")
+	}
+	cronMgr.Start()
+	defer cronMgr.Stop()
+
 	// Hook WebSocket message handler to LLM Orchestrator
 	hub.SetHandler(func(ctx context.Context, client *ws.Client, msg ws.InboundMessage) {
-		orchestrator.HandleChatMessage(ctx, client, msg)
+		_ = orchestrator.HandleChatMessage(ctx, client, msg)
 	})
 
 	// Subflow runner closure for parallel sub-agents
@@ -186,6 +199,7 @@ func main() {
 		SkillsLoader: skillsLoader,
 		ToolsReg:     toolsReg,
 		MCPMgr:       mcpMgr,
+		CronMgr:      cronMgr,
 		SpaFS:        spaFS,
 	})
 

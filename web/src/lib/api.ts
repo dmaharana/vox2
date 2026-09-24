@@ -1,4 +1,4 @@
-import { Settings, ToolDefinition, Skill, MCPServer, MemoryItem, Conversation } from '../types'
+import { Settings, ToolDefinition, Skill, MCPServer, MemoryItem, Conversation, CronJob } from '../types'
 
 const BASE_URL = '' // Relative for embedded SPA
 
@@ -154,3 +154,44 @@ export async function promoteMemories(): Promise<{ promoted_count: number }> {
   if (!res.ok) throw new Error('Failed to promote memories')
   return res.json()
 }
+
+export async function fetchCronJobs(): Promise<CronJob[]> {
+  const res = await fetch(`${BASE_URL}/api/cron/jobs`)
+  if (!res.ok) return []
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function createCronJob(job: { name?: string; schedule: string; intent: string }): Promise<CronJob> {
+  const res = await fetch(`${BASE_URL}/api/cron/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(job),
+  })
+  if (!res.ok) {
+    const txt = await res.text()
+    throw new Error(txt || 'Failed to create cron job')
+  }
+  return res.json()
+}
+
+export async function toggleCronJob(id: string, enabled: boolean): Promise<CronJob> {
+  const res = await fetch(`${BASE_URL}/api/cron/jobs/${id}/toggle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!res.ok) throw new Error('Failed to toggle cron job')
+  return res.json()
+}
+
+export async function runCronJob(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/cron/jobs/${id}/run`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to run cron job')
+}
+
+export async function deleteCronJob(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/cron/jobs/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('Failed to delete cron job')
+}
+

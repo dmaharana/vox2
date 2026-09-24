@@ -47,6 +47,13 @@ export function getMatchingSlashItems(
       badge: 'Command',
     },
     {
+      name: 'cron',
+      label: '/cron',
+      category: 'command',
+      description: 'Schedule recurring skill/intent (e.g. /cron "*/10 * * * *" -- /check-stock-price AMD)',
+      badge: 'Scheduler',
+    },
+    {
       name: 'help',
       label: '/help',
       category: 'command',

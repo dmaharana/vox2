@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"go-harness/pkg/config"
+	"go-harness/pkg/cron"
 	"go-harness/pkg/db"
 	"go-harness/pkg/mcp"
 	"go-harness/pkg/memory"
@@ -34,6 +36,7 @@ type Server struct {
 	skillsLoader *skills.Loader
 	toolsReg     *tools.Registry
 	mcpMgr       *mcp.Manager
+	cronMgr      *cron.Manager
 	httpServer   *http.Server
 	spaFS        fs.FS
 }
@@ -45,6 +48,7 @@ type ServerOptions struct {
 	SkillsLoader *skills.Loader
 	ToolsReg     *tools.Registry
 	MCPMgr       *mcp.Manager
+	CronMgr      *cron.Manager
 	SpaFS        fs.FS
 }
 
@@ -63,6 +67,7 @@ func New(cfg *config.Config, hub *ws.Hub, opts ...ServerOptions) *Server {
 		s.skillsLoader = opt.SkillsLoader
 		s.toolsReg = opt.ToolsReg
 		s.mcpMgr = opt.MCPMgr
+		s.cronMgr = opt.CronMgr
 		s.spaFS = opt.SpaFS
 	}
 
@@ -123,6 +128,13 @@ func (s *Server) setupRoutes() {
 		r.Post("/mcp/servers/{id}/connect", s.handleConnectMCPServer)
 		r.Post("/mcp/servers/{id}/disconnect", s.handleDisconnectMCPServer)
 		r.Delete("/mcp/servers/{id}", s.handleDeleteMCPServer)
+
+		// Cron Jobs
+		r.Get("/cron/jobs", s.handleListCronJobs)
+		r.Post("/cron/jobs", s.handleCreateCronJob)
+		r.Post("/cron/jobs/{id}/toggle", s.handleToggleCronJob)
+		r.Post("/cron/jobs/{id}/run", s.handleRunCronJob)
+		r.Delete("/cron/jobs/{id}", s.handleDeleteCronJob)
 	})
 
 	if s.hub != nil {
@@ -631,6 +643,119 @@ func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// -------------------------------------------------------------
+// Cron Handlers
+// -------------------------------------------------------------
+
+func (s *Server) handleListCronJobs(w http.ResponseWriter, r *http.Request) {
+	if s.cronMgr == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]db.CronJob{})
+		return
+	}
+	jobs, err := s.cronMgr.ListJobs()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if jobs == nil {
+		jobs = []db.CronJob{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(jobs)
+}
+
+func (s *Server) handleCreateCronJob(w http.ResponseWriter, r *http.Request) {
+	if s.cronMgr == nil {
+		http.Error(w, "Cron manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Name     string `json:"name"`
+		Schedule string `json:"schedule"`
+		Intent   string `json:"intent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Schedule) == "" || strings.TrimSpace(req.Intent) == "" {
+		http.Error(w, "Schedule and Intent are required", http.StatusBadRequest)
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = req.Intent
+	}
+
+	job, err := s.cronMgr.AddJob(r.Context(), name, req.Schedule, req.Intent, "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(job)
+}
+
+func (s *Server) handleToggleCronJob(w http.ResponseWriter, r *http.Request) {
+	if s.cronMgr == nil {
+		http.Error(w, "Cron manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if err := s.cronMgr.SetJobEnabled(r.Context(), id, req.Enabled); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	job, err := s.cronMgr.GetJob(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(job)
+}
+
+func (s *Server) handleRunCronJob(w http.ResponseWriter, r *http.Request) {
+	if s.cronMgr == nil {
+		http.Error(w, "Cron manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.cronMgr.TriggerNow(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "id": id})
+}
+
+func (s *Server) handleDeleteCronJob(w http.ResponseWriter, r *http.Request) {
+	if s.cronMgr == nil {
+		http.Error(w, "Cron manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.cronMgr.DeleteJob(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "id": id})
 }
 
 // Start runs the HTTP server.

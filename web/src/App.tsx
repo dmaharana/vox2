@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { ChatMessage, ToolCallState, SubflowState, MemoryItem, ToolDefinition, Skill } from './types'
-import { fetchConversation, fetchTools, fetchSkills } from './lib/api'
+import { ChatMessage, ToolCallState, SubflowState, MemoryItem, ToolDefinition, Skill, CronJob } from './types'
+import { fetchConversation, fetchTools, fetchSkills, fetchCronJobs } from './lib/api'
 import { ThemeProvider } from './lib/theme'
 import { ChatMessageList } from './components/ChatMessageList'
 import { SettingsModal } from './components/SettingsModal'
 import { MCPServersModal } from './components/MCPServersModal'
 import { ToolsSkillsModal } from './components/ToolsSkillsModal'
+import { CronModal } from './components/CronModal'
 import { MemoryModal } from './components/MemoryModal'
 import { ConversationsDrawer } from './components/ConversationsDrawer'
 import { AppSidebar } from './components/AppSidebar'
@@ -44,6 +45,9 @@ export function AppContent() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [mcpOpen, setMcpOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
+  const [cronOpen, setCronOpen] = useState(false)
+  const [cronPrefillIntent, setCronPrefillIntent] = useState('')
+  const [cronJobs, setCronJobs] = useState<CronJob[]>([])
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
 
@@ -59,7 +63,23 @@ export function AppContent() {
     fetchSkills().then((s) => setAvailableSkills(Array.isArray(s) ? s : [])).catch(console.error)
   }, [toolsOpen])
 
+  // Load cron jobs for active badge count
+  useEffect(() => {
+    fetchCronJobs().then((jobs) => setCronJobs(Array.isArray(jobs) ? jobs : [])).catch(console.error)
+  }, [cronOpen])
+
+  const handleScheduleSkill = (skillName: string) => {
+    setCronPrefillIntent(`/${skillName}`)
+    setToolsOpen(false)
+    setCronOpen(true)
+  }
+
   const wsRef = useRef<WebSocket | null>(null)
+  const conversationIdRef = useRef(conversationId)
+  useEffect(() => {
+    conversationIdRef.current = conversationId
+  }, [conversationId])
+
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
@@ -136,6 +156,14 @@ export function AppContent() {
   }, [])
 
   const handleWebSocketMessage = (msg: any) => {
+    // Prevent background tasks (e.g. dedicated cron conversations) from leaking into active chat
+    if (msg.conversation_id && msg.conversation_id !== conversationIdRef.current) {
+      if (msg.type === 'done') {
+        fetchCronJobs().then((jobs) => setCronJobs(Array.isArray(jobs) ? jobs : [])).catch(console.error)
+      }
+      return
+    }
+
     switch (msg.type) {
       case 'token': {
         const payload = msg.payload
@@ -238,6 +266,7 @@ export function AppContent() {
 
       case 'done': {
         setStreaming(false)
+        fetchCronJobs().then((jobs) => setCronJobs(Array.isArray(jobs) ? jobs : [])).catch(console.error)
         break
       }
 
@@ -468,10 +497,15 @@ export function AppContent() {
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenMcp={() => setMcpOpen(true)}
         onOpenTools={() => setToolsOpen(true)}
+        onOpenCron={() => {
+          setCronPrefillIntent('')
+          setCronOpen(true)
+        }}
         onOpenMemory={() => setMemoryOpen(true)}
         onOpenHistory={() => setHistoryOpen(true)}
         onNewChat={handleNewChat}
         wsConnected={wsConnected}
+        cronCount={cronJobs.filter((j) => j.enabled).length}
         activeModal={
           settingsOpen
             ? 'settings'
@@ -479,6 +513,8 @@ export function AppContent() {
             ? 'mcp'
             : toolsOpen
             ? 'tools'
+            : cronOpen
+            ? 'cron'
             : memoryOpen
             ? 'memory'
             : historyOpen
@@ -645,7 +681,17 @@ export function AppContent() {
         {/* Modals & Drawers */}
         <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
         <MCPServersModal open={mcpOpen} onOpenChange={setMcpOpen} />
-        <ToolsSkillsModal open={toolsOpen} onOpenChange={setToolsOpen} />
+        <ToolsSkillsModal
+          open={toolsOpen}
+          onOpenChange={setToolsOpen}
+          onScheduleSkill={handleScheduleSkill}
+        />
+        <CronModal
+          open={cronOpen}
+          onOpenChange={setCronOpen}
+          prefillIntent={cronPrefillIntent}
+          onSelectConversation={handleSelectConversation}
+        />
         <MemoryModal open={memoryOpen} onOpenChange={setMemoryOpen} />
         <ConversationsDrawer
           open={historyOpen}

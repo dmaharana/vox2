@@ -32,6 +32,7 @@ A production-ready, modular Go-based AI agent harness with an embedded React (Vi
 - [[Ticket 006] Parallel Subflow Orchestration Engine](tickets/006-parallel-flow-orchestration.md): Concurrent sub-agent worker pool, real-time WebSocket progress, OTel hierarchy, and `spawn_parallel_flow` summarization tool.
 - [[Ticket 007] OpenAI-Compatible LLM Client & Chat Loop](tickets/007-llm-orchestration-and-chat-loop.md): Configurable OpenAI streaming client, multi-turn tool execution loop, system prompt memory/skill assembly, and WebSocket broadcasting.
 - [[Ticket 008] Embedded React (Shadcn/UI) SPA & Complete Control UI](tickets/008-embedded-react-shadcn-spa.md): Full React + Tailwind + Radix UI / Shadcn dashboard, LLM/MCP/Skills/Memory modals, CSV export, live streaming chat, and disclaimer footer embedded in single Go binary.
+- [[Ticket 009] Background Cron Scheduler, /cron Slash Command & Web UI](tickets/009-cron-scheduler-and-web-ui.md): Scheduled skill/intent recurring execution, SQLite cron persistence, single-flight overlap guard, dedicated cron conversations, chat slash commands, and embedded React management modal.
 
 ## Frontier & Open Tickets
 

@@ -115,3 +115,19 @@ export interface Settings {
   otel_exporter: string
   otel_endpoint: string
 }
+
+export interface CronJob {
+  id: string
+  name: string
+  schedule: string
+  intent: string
+  conversation_id: string
+  enabled: boolean
+  last_run?: string
+  next_run?: string
+  last_status: 'pending' | 'running' | 'success' | 'error' | 'skipped'
+  last_error?: string
+  created_at: string
+  updated_at: string
+}
+

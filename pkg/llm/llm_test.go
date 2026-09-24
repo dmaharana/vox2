@@ -8,11 +8,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"go-harness/pkg/config"
+	"go-harness/pkg/cron"
 	"go-harness/pkg/db"
 	"go-harness/pkg/memory"
 	"go-harness/pkg/skills"
@@ -297,3 +299,119 @@ Step 2: Apply k8s manifests.`), 0644)
 		t.Fatalf("expected unknown response saved in DB, got %d messages", len(historyUnknown))
 	}
 }
+
+func TestCronSlashCommands(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cron-slash-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	database, _ := db.Open(filepath.Join(tempDir, "test.db"))
+	defer database.Close()
+
+	toolsReg := tools.NewRegistry()
+	cfg := &config.Config{
+		LLMBaseURL: "http://mock/v1",
+		LLMModel:   "gpt-4o",
+	}
+
+	orchestrator := NewOrchestrator(cfg, database, nil, nil, toolsReg, nil)
+
+	var cronExecuted atomic.Bool
+	runner := func(ctx context.Context, job db.CronJob) error {
+		cronExecuted.Store(true)
+		return nil
+	}
+
+	cronMgr := cron.NewManager(database, runner)
+	cronMgr.Start()
+	defer cronMgr.Stop()
+	orchestrator.SetCronManager(cronMgr)
+
+	// 1. /cron help
+	orchestrator.HandleChatMessage(context.Background(), nil, ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-cron",
+		Content:        "/cron help",
+	})
+	msgs, _ := database.GetMessages("conv-cron")
+	if len(msgs) < 2 || !strings.Contains(msgs[1].Content, "Command Reference") {
+		t.Fatalf("expected /cron help response, got: %+v", msgs)
+	}
+
+	// 2. Schedule a job: /cron "*/10 * * * *" -- /check-stock-price AMD
+	orchestrator.HandleChatMessage(context.Background(), nil, ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-cron",
+		Content:        `/cron "*/10 * * * *" -- /check-stock-price AMD`,
+	})
+	msgs, _ = database.GetMessages("conv-cron")
+	if len(msgs) < 4 || !strings.Contains(msgs[3].Content, "Scheduled Cron Job") {
+		t.Fatalf("expected job confirmation, got: %+v", msgs)
+	}
+
+	jobs, err := cronMgr.ListJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("expected 1 job scheduled, got %d (err: %v)", len(jobs), err)
+	}
+	if jobs[0].Schedule != "*/10 * * * *" || jobs[0].Intent != "/check-stock-price AMD" {
+		t.Fatalf("unexpected scheduled job content: %+v", jobs[0])
+	}
+
+	// 3. /cron list
+	orchestrator.HandleChatMessage(context.Background(), nil, ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-cron",
+		Content:        "/cron list",
+	})
+	msgs, _ = database.GetMessages("conv-cron")
+	if len(msgs) < 6 || !strings.Contains(msgs[5].Content, "Scheduled Cron Jobs") {
+		t.Fatalf("expected job list table, got: %+v", msgs)
+	}
+
+	// 4. /cron run 1
+	orchestrator.HandleChatMessage(context.Background(), nil, ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-cron",
+		Content:        "/cron run 1",
+	})
+	msgs, _ = database.GetMessages("conv-cron")
+	if len(msgs) < 8 || !strings.Contains(msgs[7].Content, "Triggered manual run") {
+		t.Fatalf("expected run confirmation, got: %+v", msgs)
+	}
+
+	// 5. /cron pause 1
+	orchestrator.HandleChatMessage(context.Background(), nil, ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-cron",
+		Content:        "/cron pause 1",
+	})
+	j, _ := cronMgr.GetJob(jobs[0].ID)
+	if j.Enabled {
+		t.Fatalf("expected job 1 to be paused")
+	}
+
+	// 6. /cron resume 1
+	orchestrator.HandleChatMessage(context.Background(), nil, ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-cron",
+		Content:        "/cron resume 1",
+	})
+	j, _ = cronMgr.GetJob(jobs[0].ID)
+	if !j.Enabled {
+		t.Fatalf("expected job 1 to be resumed")
+	}
+
+	// 7. /cron delete 1
+	orchestrator.HandleChatMessage(context.Background(), nil, ws.InboundMessage{
+		Type:           ws.TypeChatMessage,
+		ConversationID: "conv-cron",
+		Content:        "/cron delete 1",
+	})
+	remaining, _ := cronMgr.ListJobs()
+	if len(remaining) != 0 {
+		t.Fatalf("expected 0 jobs remaining after delete, got %d", len(remaining))
+	}
+}
+
