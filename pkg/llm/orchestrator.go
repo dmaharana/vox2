@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"go-harness/pkg/config"
+	"go-harness/pkg/cron"
 	"go-harness/pkg/db"
 	"go-harness/pkg/memory"
 	"go-harness/pkg/skills"
@@ -32,6 +33,7 @@ type Orchestrator struct {
 	skillsLoader *skills.Loader
 	toolsReg     *tools.Registry
 	hub          *ws.Hub
+	cronMgr      *cron.Manager
 }
 
 // NewOrchestrator creates a new Orchestrator instance.
@@ -54,8 +56,23 @@ func NewOrchestrator(
 	}
 }
 
+// SetCronManager sets the cron scheduler manager on the orchestrator.
+func (o *Orchestrator) SetCronManager(mgr *cron.Manager) {
+	o.cronMgr = mgr
+}
+
+// ExecuteIntent executes a prompt or slash command turn under convID without requiring a direct ws.Client.
+func (o *Orchestrator) ExecuteIntent(ctx context.Context, convID string, intent string) error {
+	inbound := ws.InboundMessage{
+		Type:           "chat",
+		ConversationID: convID,
+		Content:        intent,
+	}
+	return o.HandleChatMessage(ctx, nil, inbound)
+}
+
 // HandleChatMessage processes an incoming chat message from a WebSocket client.
-func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws.Client, msg ws.InboundMessage) {
+func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws.Client, msg ws.InboundMessage) error {
 	convID := msg.ConversationID
 	if convID == "" {
 		convID = uuid.New().String()
@@ -102,11 +119,175 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			helpText := "### ⚡ Slash Commands Reference\n\n" +
 				"- `/<skill_name> [prompt]` or `/skill <name> [prompt]` or `/skill:<name> [prompt]` — Directly invoke a skill with its runbook.\n" +
 				"- `/<tool_name> [args]` or `/tool <name> [args]` — Directly trigger a specific tool.\n" +
+				"- `/cron \"<schedule>\" -- <intent>` — Schedule recurring intent execution (e.g. `/cron \"*/10 * * * *\" -- /check-stock-price AMD`).\n" +
+				"- `/cron list` — List all scheduled cron jobs and their statuses.\n" +
 				"- `/skills` — List all discovered skills and their statuses.\n" +
 				"- `/tools` — List all registered tools and their categories.\n" +
 				"- `/help` — Show this slash command reference.\n"
 			o.sendDirectResponse(convID, wsClient, helpText)
-			return
+			return nil
+
+		case strings.EqualFold(cmd, "cron"):
+			if o.cronMgr == nil {
+				o.sendDirectResponse(convID, wsClient, "⚠️ Cron scheduling manager is not available.")
+				return nil
+			}
+
+			cronArgs := strings.TrimSpace(promptArg)
+			subParts := strings.Fields(cronArgs)
+			sub := ""
+			subArg := ""
+			if len(subParts) > 0 {
+				sub = strings.ToLower(subParts[0])
+				subArg = strings.TrimSpace(strings.TrimPrefix(cronArgs, subParts[0]))
+			}
+
+			switch {
+			case sub == "help":
+				helpText := "### ⏰ `/cron` Command Reference\n\n" +
+					"- `/cron \"<cron_expr>\" -- <intent>` — Schedule recurring intent execution.\n" +
+					"  *Example:* `/cron \"*/10 * * * *\" -- /check-stock-price AMD`\n" +
+					"- `/cron name:<name> \"<cron_expr>\" -- <intent>` — Schedule with a friendly name.\n" +
+					"  *Example:* `/cron name:stock \"*/10 * * * *\" -- /check-stock-price AMD`\n" +
+					"- `/cron list` — List all scheduled cron jobs and statuses.\n" +
+					"- `/cron run <#index|name|id>` — Trigger an immediate manual execution.\n" +
+					"- `/cron pause <#index|name|id>` — Pause a scheduled job.\n" +
+					"- `/cron resume <#index|name|id>` — Resume a paused job.\n" +
+					"- `/cron delete <#index|name|id>` — Delete a scheduled job.\n"
+				o.sendDirectResponse(convID, wsClient, helpText)
+				return nil
+
+			case sub == "list" || cronArgs == "":
+				jobs, err := o.cronMgr.ListJobs()
+				if err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Error listing cron jobs: %v", err))
+					return nil
+				}
+				if len(jobs) == 0 {
+					o.sendDirectResponse(convID, wsClient, "No cron jobs currently scheduled. Type `/cron help` to see usage.")
+					return nil
+				}
+				var sb strings.Builder
+				sb.WriteString("### ⏰ Scheduled Cron Jobs\n\n")
+				sb.WriteString("| # | Name | Schedule | Intent | Status | Next Run |\n|---|---|---|---|:---:|---|\n")
+				for i, j := range jobs {
+					status := "🟢 Active"
+					if !j.Enabled {
+						status = "⏸️ Paused"
+					} else if j.LastStatus == "running" {
+						status = "🔄 Running"
+					} else if j.LastStatus == "error" {
+						status = "❌ Error"
+					}
+					nextRunStr := "-"
+					if j.NextRun != nil {
+						nextRunStr = j.NextRun.Format("2006-01-02 15:04:05 UTC")
+					}
+					sb.WriteString(fmt.Sprintf("| %d | `%s` | `%s` | `%s` | %s | %s |\n", i+1, j.Name, j.Schedule, j.Intent, status, nextRunStr))
+				}
+				sb.WriteString("\n*Type `/cron run <#>`, `/cron pause <#>`, `/cron resume <#>`, `/cron delete <#>`, or manage in the Web UI.*")
+				o.sendDirectResponse(convID, wsClient, sb.String())
+				return nil
+
+			case sub == "pause":
+				if subArg == "" {
+					o.sendDirectResponse(convID, wsClient, "Usage: `/cron pause <#index|name|id>`")
+					return nil
+				}
+				job, err := o.cronMgr.FindJobByNameOrIndex(subArg)
+				if err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ %v", err))
+					return nil
+				}
+				if err := o.cronMgr.SetJobEnabled(ctx, job.ID, false); err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Failed to pause job: %v", err))
+					return nil
+				}
+				o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⏸️ Cron job `%s` has been paused.", job.Name))
+				return nil
+
+			case sub == "resume":
+				if subArg == "" {
+					o.sendDirectResponse(convID, wsClient, "Usage: `/cron resume <#index|name|id>`")
+					return nil
+				}
+				job, err := o.cronMgr.FindJobByNameOrIndex(subArg)
+				if err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ %v", err))
+					return nil
+				}
+				if err := o.cronMgr.SetJobEnabled(ctx, job.ID, true); err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Failed to resume job: %v", err))
+					return nil
+				}
+				o.sendDirectResponse(convID, wsClient, fmt.Sprintf("▶️ Cron job `%s` has been resumed.", job.Name))
+				return nil
+
+			case sub == "run":
+				if subArg == "" {
+					o.sendDirectResponse(convID, wsClient, "Usage: `/cron run <#index|name|id>`")
+					return nil
+				}
+				job, err := o.cronMgr.FindJobByNameOrIndex(subArg)
+				if err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ %v", err))
+					return nil
+				}
+				if err := o.cronMgr.TriggerNow(ctx, job.ID); err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Failed to trigger job: %v", err))
+					return nil
+				}
+				o.sendDirectResponse(convID, wsClient, fmt.Sprintf("🚀 Triggered manual run for cron job `%s`. Check conversation `[Cron] %s`.", job.Name, job.Name))
+				return nil
+
+			case sub == "delete":
+				if subArg == "" {
+					o.sendDirectResponse(convID, wsClient, "Usage: `/cron delete <#index|name|id>`")
+					return nil
+				}
+				job, err := o.cronMgr.FindJobByNameOrIndex(subArg)
+				if err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ %v", err))
+					return nil
+				}
+				if err := o.cronMgr.DeleteJob(ctx, job.ID); err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Failed to delete job: %v", err))
+					return nil
+				}
+				o.sendDirectResponse(convID, wsClient, fmt.Sprintf("🗑️ Cron job `%s` has been deleted.", job.Name))
+				return nil
+
+			default:
+				// Creation command: parse schedule and intent
+				name, schedule, intent, err := ParseCronCommand(cronArgs)
+				if err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Invalid /cron command: %v\n\nUsage: `/cron \"<expr>\" -- <intent>` (e.g. `/cron \"*/10 * * * *\" -- /check-stock-price AMD`)", err))
+					return nil
+				}
+
+				job, err := o.cronMgr.AddJob(ctx, name, schedule, intent, "")
+				if err != nil {
+					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Failed to schedule cron job: %v", err))
+					return nil
+				}
+
+				convTitle := fmt.Sprintf("[Cron] %s", job.Name)
+				nextStr := "-"
+				if job.NextRun != nil {
+					nextStr = job.NextRun.Format("2006-01-02 15:04:05 UTC")
+				}
+
+				confirm := fmt.Sprintf("✅ **Scheduled Cron Job**\n\n"+
+					"- **Name:** `%s`\n"+
+					"- **Schedule:** `%s`\n"+
+					"- **Intent:** `%s`\n"+
+					"- **Next Run:** %s\n"+
+					"- **Dedicated Conversation:** `%s`\n\n"+
+					"*Type `/cron list` to view all schedules, or open the Cron modal from the sidebar.*",
+					job.Name, job.Schedule, job.Intent, nextStr, convTitle)
+				o.sendDirectResponse(convID, wsClient, confirm)
+				return nil
+			}
 
 		case strings.EqualFold(cmd, "skills"):
 			var sb strings.Builder
@@ -125,7 +306,7 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 				sb.WriteString("\n*Type `/<skill_name> [prompt]` or `/skill:<name>` to invoke a skill directly, or use the `read_skill` tool.*")
 			}
 			o.sendDirectResponse(convID, wsClient, sb.String())
-			return
+			return nil
 
 		case strings.EqualFold(cmd, "tools"):
 			var sb strings.Builder
@@ -144,7 +325,7 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 				sb.WriteString("\n*Type `/<tool_name> [args]` to trigger a tool directly.*")
 			}
 			o.sendDirectResponse(convID, wsClient, sb.String())
-			return
+			return nil
 
 		case strings.EqualFold(cmd, "skill") || strings.HasPrefix(strings.ToLower(cmd), "skill:"):
 			var skillName string
@@ -159,11 +340,11 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 				skill, ok := o.findSkill(skillName)
 				if !ok {
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Skill `%s` not found. Type `/skills` to see available skills.", skillName))
-					return
+					return nil
 				}
 				if !skill.Enabled {
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Skill `%s` is currently disabled. Enable it in the Tools & Skills modal first.", skill.Name))
-					return
+					return nil
 				}
 				promptSuffix := ""
 				if promptArg != "" {
@@ -172,7 +353,7 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 				directSkillSection = fmt.Sprintf("\n## Direct Invocation: Skill '%s'\n**Description:** %s\n\n%s%s\n", skill.Name, skill.Description, skill.Content, promptSuffix)
 			} else {
 				o.sendDirectResponse(convID, wsClient, "Usage: `/skill <skill_name> [prompt...]` or `/skill:<name> [prompt...]` (e.g. `/skill:code-review Check this function`)")
-				return
+				return nil
 			}
 
 		case strings.EqualFold(cmd, "tool"):
@@ -181,16 +362,16 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 				t, ok := o.toolsReg.Get(toolName)
 				if !ok {
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❌ Tool `%s` not found. Type `/tools` to see available tools.", toolName))
-					return
+					return nil
 				}
 				if !t.Enabled {
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Tool `%s` is currently disabled. Enable it in the Tools & Skills modal first.", t.Name))
-					return
+					return nil
 				}
 				directSkillSection = fmt.Sprintf("\n## Direct Tool Invocation: '%s'\n**Directive:** The user explicitly triggered the `%s` tool (%s). Prioritize executing the `%s` tool to fulfill this turn's request.\n", t.Name, t.Name, t.Description, t.Name)
 			} else {
 				o.sendDirectResponse(convID, wsClient, "Usage: `/tool <tool_name> [args...]` (e.g. `/tool read_file main.go`)")
-				return
+				return nil
 			}
 
 		default:
@@ -198,7 +379,7 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			if skill, ok := o.findSkill(cmd); ok {
 				if !skill.Enabled {
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Skill `%s` is currently disabled. Enable it in the Tools & Skills modal first.", skill.Name))
-					return
+					return nil
 				}
 				promptSuffix := ""
 				if promptArg != "" {
@@ -209,12 +390,12 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 				// Check if command matches a tool directly (e.g. /read_file ...)
 				if !t.Enabled {
 					o.sendDirectResponse(convID, wsClient, fmt.Sprintf("⚠️ Tool `%s` is currently disabled. Enable it in the Tools & Skills modal first.", t.Name))
-					return
+					return nil
 				}
 				directSkillSection = fmt.Sprintf("\n## Direct Tool Invocation: '%s'\n**Directive:** The user explicitly triggered the `%s` tool (%s). Prioritize executing the `%s` tool to fulfill this turn's request.\n", t.Name, t.Name, t.Description, t.Name)
 			} else {
 				o.sendDirectResponse(convID, wsClient, fmt.Sprintf("❓ Unknown command `/%s`. Type `/help`, `/skills`, or `/tools` to see available commands.", cmd))
-				return
+				return nil
 			}
 		}
 	}
@@ -233,18 +414,16 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			}
 			memorySection = sb.String()
 
-			if wsClient != nil {
-				wsClient.Send(ws.OutboundMessage{
-					Type:           ws.TypeMemoryEvent,
-					ConversationID: convID,
-					Payload: ws.MemoryPayload{
-						Action: "retrieved",
-						Query:  msg.Content,
-						Count:  len(memories),
-						Items:  memories,
-					},
-				})
-			}
+			o.sendOutbound(wsClient, ws.OutboundMessage{
+				Type:           ws.TypeMemoryEvent,
+				ConversationID: convID,
+				Payload: ws.MemoryPayload{
+					Action: "retrieved",
+					Query:  msg.Content,
+					Count:  len(memories),
+					Items:  memories,
+				},
+			})
 		}
 	}
 
@@ -326,14 +505,12 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 		select {
 		case <-ctx.Done():
 			log.Warn().Str("conversation_id", convID).Msg("Chat execution cancelled by user")
-			if wsClient != nil {
-				wsClient.Send(ws.OutboundMessage{
-					Type:           ws.TypeError,
-					ConversationID: convID,
-					Error:          "Execution cancelled by user",
-				})
-			}
-			return
+			o.sendOutbound(wsClient, ws.OutboundMessage{
+				Type:           ws.TypeError,
+				ConversationID: convID,
+				Error:          "Execution cancelled by user",
+			})
+			return ctx.Err()
 		default:
 		}
 
@@ -342,14 +519,12 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 		stream, err := o.client.StreamChat(ctx, openAIMessages, availableTools)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to start chat completion stream")
-			if wsClient != nil {
-				wsClient.Send(ws.OutboundMessage{
-					Type:           ws.TypeError,
-					ConversationID: convID,
-					Error:          err.Error(),
-				})
-			}
-			return
+			o.sendOutbound(wsClient, ws.OutboundMessage{
+				Type:           ws.TypeError,
+				ConversationID: convID,
+				Error:          err.Error(),
+			})
+			return err
 		}
 
 		var turnText strings.Builder
@@ -370,16 +545,14 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 				turnText.WriteString(delta.Content)
 				finalAssistantText.WriteString(delta.Content)
 
-				if wsClient != nil {
-					wsClient.Send(ws.OutboundMessage{
-						Type:           ws.TypeToken,
-						ConversationID: convID,
-						Payload: ws.TokenPayload{
-							Delta:    delta.Content,
-							FullText: finalAssistantText.String(),
-						},
-					})
-				}
+				o.sendOutbound(wsClient, ws.OutboundMessage{
+					Type:           ws.TypeToken,
+					ConversationID: convID,
+					Payload: ws.TokenPayload{
+						Delta:    delta.Content,
+						FullText: finalAssistantText.String(),
+					},
+				})
 			}
 		}
 		stream.Close()
@@ -412,18 +585,16 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 			toolName := tc.Function.Name
 			argsJSON := json.RawMessage(tc.Function.Arguments)
 
-			if wsClient != nil {
-				wsClient.Send(ws.OutboundMessage{
-					Type:           ws.TypeToolCall,
-					ConversationID: convID,
-					Payload: ws.ToolCallPayload{
-						ID:        toolCallID,
-						Tool:      toolName,
-						Arguments: string(argsJSON),
-						Status:    "started",
-					},
-				})
-			}
+			o.sendOutbound(wsClient, ws.OutboundMessage{
+				Type:           ws.TypeToolCall,
+				ConversationID: convID,
+				Payload: ws.ToolCallPayload{
+					ID:        toolCallID,
+					Tool:      toolName,
+					Arguments: string(argsJSON),
+					Status:    "started",
+				},
+			})
 
 			// Execute tool
 			execRes, execErr := o.toolsReg.Execute(ctx, toolName, argsJSON)
@@ -438,18 +609,16 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 					Status:    "failed",
 					Error:     execErr.Error(),
 				})
-				if wsClient != nil {
-					wsClient.Send(ws.OutboundMessage{
-						Type:           ws.TypeToolCall,
-						ConversationID: convID,
-						Payload: ws.ToolCallPayload{
-							ID:     toolCallID,
-							Tool:   toolName,
-							Status: "failed",
-							Error:  execErr.Error(),
-						},
-					})
-				}
+				o.sendOutbound(wsClient, ws.OutboundMessage{
+					Type:           ws.TypeToolCall,
+					ConversationID: convID,
+					Payload: ws.ToolCallPayload{
+						ID:     toolCallID,
+						Tool:   toolName,
+						Status: "failed",
+						Error:  execErr.Error(),
+					},
+				})
 			} else {
 				resBytes, _ := json.Marshal(execRes)
 				resStr = string(resBytes)
@@ -460,28 +629,26 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 					Status:    "completed",
 					Result:    execRes,
 				})
-				if wsClient != nil {
-					wsClient.Send(ws.OutboundMessage{
-						Type:           ws.TypeToolCall,
+				o.sendOutbound(wsClient, ws.OutboundMessage{
+					Type:           ws.TypeToolCall,
+					ConversationID: convID,
+					Payload: ws.ToolCallPayload{
+						ID:     toolCallID,
+						Tool:   toolName,
+						Status: "completed",
+						Result: execRes,
+					},
+				})
+
+				if toolName == "save_memory" {
+					o.sendOutbound(wsClient, ws.OutboundMessage{
+						Type:           ws.TypeMemoryEvent,
 						ConversationID: convID,
-						Payload: ws.ToolCallPayload{
-							ID:     toolCallID,
-							Tool:   toolName,
-							Status: "completed",
-							Result: execRes,
+						Payload: ws.MemoryPayload{
+							Action: "saved",
+							Count:  1,
 						},
 					})
-
-					if toolName == "save_memory" {
-						wsClient.Send(ws.OutboundMessage{
-							Type:           ws.TypeMemoryEvent,
-							ConversationID: convID,
-							Payload: ws.MemoryPayload{
-								Action: "saved",
-								Count:  1,
-							},
-						})
-					}
 				}
 
 				// Auto-save key searches to semantic cache tier
@@ -560,17 +727,16 @@ func (o *Orchestrator) HandleChatMessage(parentCtx context.Context, wsClient *ws
 	}
 
 	// 7. Emit Done event
-	if wsClient != nil {
-		wsClient.Send(ws.OutboundMessage{
-			Type:           ws.TypeDone,
-			ConversationID: convID,
-			Payload: map[string]any{
-				"conversation_id": convID,
-				"content":         finalAssistantText.String(),
-				"disclaimer":      "AI can make mistakes, so double-check responses",
-			},
-		})
-	}
+	o.sendOutbound(wsClient, ws.OutboundMessage{
+		Type:           ws.TypeDone,
+		ConversationID: convID,
+		Payload: map[string]any{
+			"conversation_id": convID,
+			"content":         finalAssistantText.String(),
+			"disclaimer":      "AI can make mistakes, so double-check responses",
+		},
+	})
+	return nil
 }
 
 func (o *Orchestrator) findSkill(name string) (*skills.Skill, bool) {
@@ -592,17 +758,23 @@ func (o *Orchestrator) findSkill(name string) (*skills.Skill, bool) {
 	return nil, false
 }
 
-func (o *Orchestrator) sendDirectResponse(convID string, wsClient *ws.Client, content string) {
+func (o *Orchestrator) sendOutbound(wsClient *ws.Client, msg ws.OutboundMessage) {
 	if wsClient != nil {
-		wsClient.Send(ws.OutboundMessage{
-			Type:           ws.TypeToken,
-			ConversationID: convID,
-			Payload: ws.TokenPayload{
-				Delta:    content,
-				FullText: content,
-			},
-		})
+		wsClient.Send(msg)
+	} else if o.hub != nil {
+		o.hub.Broadcast(msg)
 	}
+}
+
+func (o *Orchestrator) sendDirectResponse(convID string, wsClient *ws.Client, content string) {
+	o.sendOutbound(wsClient, ws.OutboundMessage{
+		Type:           ws.TypeToken,
+		ConversationID: convID,
+		Payload: ws.TokenPayload{
+			Delta:    content,
+			FullText: content,
+		},
+	})
 
 	if o.db != nil {
 		_ = o.db.AddMessage(db.Message{
@@ -612,15 +784,14 @@ func (o *Orchestrator) sendDirectResponse(convID string, wsClient *ws.Client, co
 		})
 	}
 
-	if wsClient != nil {
-		wsClient.Send(ws.OutboundMessage{
-			Type:           ws.TypeDone,
-			ConversationID: convID,
-			Payload: map[string]any{
-				"conversation_id": convID,
-				"content":         content,
-				"disclaimer":      "AI can make mistakes, so double-check responses",
-			},
-		})
-	}
+	o.sendOutbound(wsClient, ws.OutboundMessage{
+		Type:           ws.TypeDone,
+		ConversationID: convID,
+		Payload: map[string]any{
+			"conversation_id": convID,
+			"content":         content,
+			"disclaimer":      "AI can make mistakes, so double-check responses",
+		},
+	})
 }
+
